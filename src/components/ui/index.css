@@ -1,0 +1,88 @@
+.form-container {
+  padding: var(--spacing-lg) var(--spacing-xl);
+  max-width: 560px;
+  width: 100%;
+  margin: 0 auto;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.action-section {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+.action-section.danger-zone {
+  margin-top: var(--spacing-md);
+}
+
+.form-group {
+  margin-bottom: var(--spacing-md);
+}
+
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-neutral-text-primary);
+  margin-bottom: 6px;
+}
+
+.form-group input {
+  width: 100%;
+  max-width: 360px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-neutral-border);
+  border-radius: var(--rounded-md);
+  font-size: 13px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: var(--color-primary-accent);
+  box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.1);
+}
+
+.instance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.version-info {
+  margin-top: var(--spacing-md);
+}
+
+/* 警告框和提示框样式 */
+.warning-box,
+.hint-box {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--color-neutral-bg-secondary);
+  border-radius: var(--rounded-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.warning-content,
+.hint-content {
+  flex: 1;
+}
+
+.warning-content strong,
+.hint-content strong {
+  display: block;
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.warning-content p,
+.hint-content p {
+  font-size: 12px;
+  color: var(--color-neutral-text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}

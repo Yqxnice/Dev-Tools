@@ -1,0 +1,32 @@
+[package]
+name = "dev_tools"
+version = "0.1.0"
+description = "Dev Tools - Windows 本地开发环境管理工具（MySQL + Python）"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "dev_tools_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "process", "time"] }
+regex = "1"
+once_cell = "1"
+dirs = "5.0"
+reqwest = { version = "0.11", features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+check_elevation = "0.2.7"
