@@ -37,3 +37,17 @@ pub async fn execute_command_with_timeout(
 pub async fn execute_command(cmd: &str, args: &[&str]) -> Result<ProcessOutput, String> {
     execute_command_with_timeout(cmd, args, 30).await
 }
+
+/// 验证服务名是否安全（仅允许字母、数字、连字符、下划线、点号）
+pub fn validate_service_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("服务名不能为空".into());
+    }
+    if name.len() > 256 {
+        return Err("服务名过长".into());
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err(format!("服务名包含非法字符: {}", name));
+    }
+    Ok(())
+}

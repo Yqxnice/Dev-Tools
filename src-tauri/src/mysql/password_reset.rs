@@ -3,6 +3,21 @@ use super::detector;
 use std::path::PathBuf;
 use tauri::AppHandle;
 
+/// 创建临时 MySQL 配置文件，避免密码出现在进程参数中
+async fn create_temp_mysql_config(password: &str) -> Result<PathBuf, String> {
+    let temp_dir = std::env::temp_dir();
+    let config_path = temp_dir.join(format!("devtools_mysql_{}.cnf", std::process::id()));
+    let config_content = format!("[client]\nuser=root\npassword={}\n", password);
+    tokio::fs::write(&config_path, &config_content).await
+        .map_err(|e| format!("创建临时配置文件失败: {}", e))?;
+    Ok(config_path)
+}
+
+/// 清理临时 MySQL 配置文件
+async fn cleanup_temp_mysql_config(path: &PathBuf) {
+    let _ = tokio::fs::remove_file(path).await;
+}
+
 // 在 Windows 上隐藏控制台窗口，避免闪烁
 #[cfg(target_os = "windows")]
 fn hide_console_window(command: &mut tokio::process::Command) {
@@ -55,12 +70,27 @@ pub fn escape_mysql_password(password: &str) -> String {
     result
 }
 
-/// 验证密码是否符合基本安全要求
+/// 验证密码是否符合安全要求
 pub fn validate_password_strength(password: &str) -> Result<(), String> {
-    if password.len() < 4 {
-        return Err("密码长度至少需要 4 个字符".to_string());
+    if password.len() < 8 {
+        return Err("密码长度至少需要 8 个字符".to_string());
     }
-    
+    if password.len() > 128 {
+        return Err("密码长度不能超过 128 个字符".to_string());
+    }
+    let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
+    let has_lower = password.chars().any(|c| c.is_ascii_lowercase());
+    let has_digit = password.chars().any(|c| c.is_ascii_digit());
+    let has_special = password.chars().any(|c| !c.is_ascii_alphanumeric());
+
+    let strength = [has_upper, has_lower, has_digit, has_special]
+        .iter()
+        .filter(|&&x| x)
+        .count();
+
+    if strength < 2 {
+        return Err("密码需包含大写字母、小写字母、数字、特殊字符中的至少 2 种".to_string());
+    }
     Ok(())
 }
 
@@ -194,20 +224,35 @@ pub fn build_safe_change_password_sql(version: &str, new_password: &str) -> Stri
 }
 
 /// 构建简单直接的 ALTER USER 方式（仅修改存在的用户）
-pub fn build_simple_alter_sql(version: &str, new_password: &str, host: &str) -> String {
+pub fn build_simple_alter_sql(version: &str, new_password: &str, host: &str) -> Result<String, String> {
+    validate_mysql_host(host)?;
     let escaped = escape_mysql_password(new_password);
     
     if version.starts_with("8.") {
-        format!(
+        Ok(format!(
             "ALTER USER 'root'@'{}' IDENTIFIED BY '{}'; FLUSH PRIVILEGES;",
             host, escaped
-        )
+        ))
     } else {
-        format!(
+        Ok(format!(
             "SET PASSWORD FOR 'root'@'{}' = PASSWORD('{}'); FLUSH PRIVILEGES;",
             host, escaped
-        )
+        ))
     }
+}
+
+/// 验证 MySQL 主机名是否安全（仅允许主机名合法字符）
+pub fn validate_mysql_host(host: &str) -> Result<(), String> {
+    if host.is_empty() {
+        return Err("主机名不能为空".into());
+    }
+    if host.len() > 253 {
+        return Err("主机名过长".into());
+    }
+    if !host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == '%') {
+        return Err(format!("主机名包含非法字符: {}", host));
+    }
+    Ok(())
 }
 
 fn parse_affected_rows(stdout: &str) -> Option<u64> {
@@ -256,6 +301,9 @@ async fn test_mysql_connection(
         logger::info(app_handle, &format!("使用端口: {}", p));
     }
     
+    // 使用临时配置文件代替 -p 参数，避免密码泄露
+    let config_path = create_temp_mysql_config(password).await?;
+    
     // 增加重试机制
     let max_retries = 5;
     let mut retry_count = 0;
@@ -264,16 +312,13 @@ async fn test_mysql_connection(
         retry_count += 1;
         logger::info(app_handle, &format!("连接测试尝试 {}/{}...", retry_count, max_retries));
         
-        let p_arg = format!("-p{}", password);
         let mut args: Vec<String> = vec![
-            "-u".to_string(),
-            "root".to_string(),
-            p_arg,
+            format!("--defaults-file={}", config_path.display()),
             "-e".to_string(),
             test_sql.to_string(),
         ];
         if let Some(p) = port {
-            args.insert(2, "-h127.0.0.1".to_string());
+            args.push("-h127.0.0.1".to_string());
             args.push("-P".to_string());
             args.push(p.to_string());
         }
@@ -283,6 +328,7 @@ async fn test_mysql_connection(
         let mysql_path_str = match mysql_path.to_str() {
             Some(s) => s,
             None => {
+                cleanup_temp_mysql_config(&config_path).await;
                 logger::error(app_handle, "MySQL 路径无效");
                 return Err("MySQL 路径无效".to_string());
             }
@@ -304,6 +350,7 @@ async fn test_mysql_connection(
                 }
                 
                 if output.exit_code == 0 {
+                    cleanup_temp_mysql_config(&config_path).await;
                     logger::info(app_handle, "MySQL 连接测试成功！");
                     return Ok(true);
                 } else {
@@ -324,6 +371,7 @@ async fn test_mysql_connection(
         }
     }
     
+    cleanup_temp_mysql_config(&config_path).await;
     logger::error(app_handle, &format!("已重试 {} 次，全部失败", max_retries));
     Ok(false)
 }
@@ -450,6 +498,7 @@ pub async fn reset_mysql_password(
                 if !stderr_text.is_empty() {
                     logger::error(&app_handle, &format!("MySQL 错误输出:\n{}", stderr_text));
                 }
+                let _ = child.kill().await;
                 return Err(format!("MySQL 进程在启动后第 {} 秒退出，请查看上方错误输出", i));
             }
             Ok(None) => {
@@ -475,7 +524,7 @@ pub async fn reset_mysql_password(
     logger::info(&app_handle, "正在查询当前MySQL所有用户信息...");
     let query_users_sql = "SELECT User, Host, LENGTH(User) AS user_len FROM mysql.user;";
     let query_result = process_manager::execute_command(
-        mysql_path.to_str().unwrap(),
+        mysql_path.to_str().unwrap_or(""),
         &["-u", "root", "--protocol=memory", "-e", query_users_sql]
     ).await;
     
@@ -504,6 +553,7 @@ pub async fn reset_mysql_password(
         Some(s) => s,
         None => {
             logger::warn(&app_handle, "MySQL 路径无法转换为 UTF-8 字符串");
+            let _ = child.kill().await;
             return Err("MySQL 路径无效".into());
         }
     };
@@ -567,7 +617,7 @@ pub async fn reset_mysql_password(
             Ok(output) => {
                 logger::info(&app_handle, &format!("验证查询退出码: {}", output.exit_code));
                 if output.exit_code == 0 {
-                    logger::info(&app_handle, &format!("用户和密码验证结果:\n{}", output.stdout));
+                    logger::info(&app_handle, "用户密码验证查询成功（哈希已隐藏）");
                 } else {
                     logger::warn(&app_handle, &format!("验证查询警告:\n{}", output.stderr));
                 }
@@ -721,16 +771,16 @@ pub async fn change_mysql_password(
             return Err("MySQL 路径无效".to_string());
         }
     };
-    let p_arg = format!("-p{}", old_password);
+
+    // 使用临时配置文件代替 -p 参数，避免密码泄露
+    let config_path = create_temp_mysql_config(&old_password).await?;
 
     // 构建基础参数
     let mut base_args: Vec<String> = vec![
-        "-u".to_string(),
-        "root".to_string(),
-        p_arg,
+        format!("--defaults-file={}", config_path.display()),
     ];
     if let Some(p) = port {
-        base_args.insert(2, "-h127.0.0.1".to_string());
+        base_args.push("-h127.0.0.1".to_string());
         base_args.push("-P".to_string());
         base_args.push(p.to_string());
     }
@@ -752,6 +802,7 @@ pub async fn change_mysql_password(
                                    output.stderr.contains("ERROR 1045");
             if is_access_denied {
                 logger::error(&app_handle, "❌ 旧密码不正确！请检查你输入的旧密码是否正确。");
+                cleanup_temp_mysql_config(&config_path).await;
                 return Err("旧密码不正确！请确认你输入的旧密码是否正确，或者使用密码重置功能。".to_string());
             }
         }
@@ -768,7 +819,7 @@ pub async fn change_mysql_password(
     // 使用最简单直接的方法：先尝试只修改 localhost
     logger::info(&app_handle, &format!("检测到 MySQL 版本 {}, 使用简单直接的方式修改密码...", version));
     
-    let simple_sql = build_simple_alter_sql(version, &new_password, "localhost");
+    let simple_sql = build_simple_alter_sql(version, &new_password, "localhost")?;
     let masked_simple_sql = simple_sql.replace(&new_password, "***");
     logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_simple_sql));
     
@@ -787,7 +838,10 @@ pub async fn change_mysql_password(
             
             logger::info(&app_handle, "正在测试连接...");
             
-            match test_mysql_connection(&app_handle, &mysql_path, &new_password, port).await {
+            let test_result = test_mysql_connection(&app_handle, &mysql_path, &new_password, port).await;
+            cleanup_temp_mysql_config(&config_path).await;
+            
+            match test_result {
                 Ok(true) => {
                     logger::info(&app_handle, "========== 密码修改成功！连接测试通过！ ==========");
                     Ok("密码修改成功，连接测试通过！".to_string())
@@ -839,6 +893,7 @@ pub async fn change_mysql_password(
                         // 如果备用方案也失败，给出友好提示
                         logger::error(&app_handle, "所有修改密码的方案都失败了！");
                         logger::info(&app_handle, "💡 建议：如果旧密码忘记了，请使用密码重置功能！");
+                        cleanup_temp_mysql_config(&config_path).await;
                         Err("密码修改失败！请确认旧密码是否正确，或者尝试使用密码重置功能。".to_string())
                     }
                 }
@@ -879,6 +934,7 @@ pub async fn change_mysql_password(
                     _ => {
                         logger::error(&app_handle, "所有修改密码的方案都失败了！");
                         logger::info(&app_handle, "💡 建议：如果旧密码忘记了，请使用密码重置功能！");
+                        cleanup_temp_mysql_config(&config_path).await;
                         Err(format!("密码修改失败！错误信息: {}", output.stderr))
                     }
                 }
@@ -886,6 +942,7 @@ pub async fn change_mysql_password(
         }
         Err(e) => {
             logger::error(&app_handle, &format!("执行异常: {}", e));
+            cleanup_temp_mysql_config(&config_path).await;
             Err(format!("执行异常: {}", e))
         }
     }
@@ -909,13 +966,24 @@ mod tests {
     #[test]
     fn validate_password_strength_rejects_short_password() {
         assert!(validate_password_strength("123").is_err());
-        assert!(validate_password_strength("1234").is_ok());
+        assert!(validate_password_strength("1234567").is_err());
+        assert!(validate_password_strength("abcdefgh").is_err());
+    }
+
+    #[test]
+    fn validate_password_strength_rejects_weak_passwords() {
+        // Only lowercase - needs at least 2 character types
+        assert!(validate_password_strength("password").is_err());
+        // Only digits
+        assert!(validate_password_strength("12345678").is_err());
     }
 
     #[test]
     fn validate_password_strength_accepts_normal_passwords() {
-        assert!(validate_password_strength("mypassword").is_ok());
+        assert!(validate_password_strength("Password1").is_ok());
         assert!(validate_password_strength("SecurePass123!").is_ok());
+        assert!(validate_password_strength("my_pass1").is_ok());
+        assert!(validate_password_strength("ABCdef12").is_ok());
     }
 
     #[test]

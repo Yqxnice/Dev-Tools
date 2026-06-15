@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, nextTick, onMounted, onErrorCaptured, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onErrorCaptured, onUnmounted } from 'vue'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -15,6 +15,8 @@ const isProduction = import.meta.env.PROD
 // 存储事件监听器的取消函数
 let unlistenLog = null
 let selectStartHandler = null
+let errorHandler = null
+let unhandledRejectionHandler = null
 
 // 禁用右键菜单
 function disableContextMenu(e) {
@@ -132,7 +134,6 @@ const pythonToolRef = ref(null)
 
 // 免责声明Modal控制
 const disclaimerVisible = ref(true)
-const appInitialized = ref(false)
 const isAdmin = ref(false)
 const checkingAdmin = ref(true)
 const isGuestMode = ref(false)
@@ -142,11 +143,10 @@ async function handleDisclaimerConfirm() {
   try {
     await invoke('set_guest_mode', { enabled: false })
   } catch (e) {
-    console.warn('设置游客模式失败:', e)
+    if (!isProduction) console.warn('设置游客模式失败:', e)
   }
   disclaimerVisible.value = false
-  appInitialized.value = true
-  initializeApp()
+  await initializeApp()
 }
 
 // 取消免责声明，关闭程序
@@ -155,7 +155,7 @@ async function handleDisclaimerCancel() {
     const appWindow = getCurrentWindow()
     await appWindow.close()
   } catch (error) {
-    console.error('关闭窗口失败:', error)
+    if (!isProduction) console.error('关闭窗口失败:', error)
     // 备用方案：使用标准方式关闭
     window.close()
   }
@@ -166,28 +166,29 @@ async function handleGuestMode() {
   try {
     await invoke('set_guest_mode', { enabled: true })
   } catch (e) {
-    console.warn('设置游客模式失败:', e)
+    if (!isProduction) console.warn('设置游客模式失败:', e)
   }
   isGuestMode.value = true
   disclaimerVisible.value = false
-  appInitialized.value = true
-  initializeApp()
+  await initializeApp()
 }
 
 // 捕获组件错误
 onErrorCaptured((error, instance, info) => {
   addError(error, `component: ${info}`)
-  return false // 继续向上传播
+  return false // 阻止错误向上传播
 })
 
 // 全局未处理错误监听
-window.addEventListener('error', (event) => {
+errorHandler = (event) => {
   addError(event.error, 'global_error')
-})
+}
+window.addEventListener('error', errorHandler)
 
-window.addEventListener('unhandledrejection', (event) => {
+unhandledRejectionHandler = (event) => {
   addError(event.reason, 'unhandled_promise')
-})
+}
+window.addEventListener('unhandledrejection', unhandledRejectionHandler)
 
 // 应用初始化函数
 async function initializeApp() {
@@ -261,7 +262,7 @@ function saveCache(key, data) {
     localStorage.setItem(key, JSON.stringify(toSave))
   } catch (e) {
     addLog('error', `保存 ${key} 到 localStorage 失败`)
-    console.error('保存缓存失败:', e)
+    if (!isProduction) console.error('保存缓存失败:', e)
   }
 }
 
@@ -293,24 +294,15 @@ const showToast = (message, type = 'success') => {
 
 // 切换功能
 async function selectFeature(featureId) {
-  const featureNames = {
-    'version-check': '版本检测',
-    'available-versions': '可用版本',
-    'auto-uninstall': '自动卸载',
-    'residue-clear': '残留清除',
-    'password-reset': '密码重置',
-    'password-change': '密码修改',
-    'env-list': '环境列表',
-    'package-manage': '包管理',
-    'pip-mirror': '镜像源'
-  }
-  
   logs.value = []
   currentFeature.value = featureId
   
-  // 切换到卸载页面时，调用子组件的方法
   if (featureId === 'auto-uninstall' && currentTool.value === 'mysql' && mysqlToolRef.value) {
-    await mysqlToolRef.value.checkForUninstall()
+    try {
+      await mysqlToolRef.value.checkForUninstall()
+    } catch (e) {
+      addLog('error', `检测可卸载实例失败: ${e}`)
+    }
   }
 }
 
@@ -351,7 +343,7 @@ async function checkAdminPrivileges() {
     const isAdminResult = await invoke('is_running_as_admin')
     isAdmin.value = isAdminResult
   } catch (error) {
-    console.error('检测权限失败:', error)
+    if (!isProduction) console.error('检测权限失败:', error)
     isAdmin.value = false
   } finally {
     checkingAdmin.value = false
@@ -367,17 +359,19 @@ onMounted(() => {
 // onUnmounted 清理
 onUnmounted(() => {
   cleanupSecurityMeasures()
-  // 清理日志监听器
   if (unlistenLog) {
     unlistenLog()
     unlistenLog = null
   }
+  if (errorHandler) {
+    window.removeEventListener('error', errorHandler)
+    errorHandler = null
+  }
+  if (unhandledRejectionHandler) {
+    window.removeEventListener('unhandledrejection', unhandledRejectionHandler)
+    unhandledRejectionHandler = null
+  }
 })
-
-// 监听日志变化，自动滚动
-watch(logs, () => {
-  scrollToBottom()
-}, { deep: true })
 
 // 工具组件的事件处理
 function handleLogFromTool(type, message) {
@@ -455,21 +449,6 @@ function handleSwitchFeatureFromTool(featureId) {
         {{ toast.message }}
       </div>
     </transition>
-
-    <!-- 预加载背景 - 确认前显示
-    <div v-if="!appInitialized" class="preload-background">
-      <div class="preload-content">
-        <div class="preload-logo">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-            <polyline points="2 17 12 22 22 17"></polyline>
-            <polyline points="2 12 12 17 22 12"></polyline>
-          </svg>
-        </div>
-        <h2 class="preload-title">Dev Tools</h2>
-        <p class="preload-subtitle">本地开发环境管理面板</p>
-      </div>
-    </div> -->
 
     <!-- 应用主界面 - 仅在确认免责声明后显示 -->
     <div class="app-main-wrapper">
@@ -611,7 +590,6 @@ function handleSwitchFeatureFromTool(featureId) {
             @log="handleLogFromTool"
             @toast="handleToastFromTool"
             @loading="handleLoadingFromTool"
-            @switch-feature="handleSwitchFeatureFromTool"
           />
         </div>
       </main>

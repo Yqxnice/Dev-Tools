@@ -29,6 +29,11 @@ async fn detect_mysql(app_handle: tauri::AppHandle) -> MySQLInfo {
 #[tauri::command]
 async fn uninstall_mysql(app_handle: tauri::AppHandle, services: Option<Vec<String>>) -> Result<(), String> {
     access::require_admin()?;
+    if let Some(ref svcs) = services {
+        for s in svcs {
+            process_manager::validate_service_name(s)?;
+        }
+    }
     mysql::uninstaller::uninstall_selected_mysql(app_handle, services.unwrap_or_default()).await
 }
 
@@ -94,12 +99,14 @@ async fn change_mysql_password(
 
 #[tauri::command]
 async fn start_mysql_service(app_handle: tauri::AppHandle, service_name: String) -> Result<(), String> {
+    process_manager::validate_service_name(&service_name)?;
     access::require_admin()?;
     mysql::detector::start_mysql_service(app_handle, service_name).await
 }
 
 #[tauri::command]
 async fn stop_mysql_service(app_handle: tauri::AppHandle, service_name: String) -> Result<(), String> {
+    process_manager::validate_service_name(&service_name)?;
     access::require_admin()?;
     mysql::detector::stop_mysql_service(app_handle, service_name).await
 }

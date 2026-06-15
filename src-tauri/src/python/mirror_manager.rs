@@ -2,6 +2,19 @@ use super::super::{logger, process_manager};
 use super::super::types::PipMirror;
 use tauri::AppHandle;
 
+pub fn validate_mirror_url(url: &str) -> Result<(), String> {
+    if url.is_empty() {
+        return Err("镜像源 URL 不能为空".into());
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("镜像源 URL 必须以 http:// 或 https:// 开头".into());
+    }
+    if url.contains(|c: char| c == ';' || c == '|' || c == '&' || c == '`') {
+        return Err("URL 包含非法字符".into());
+    }
+    Ok(())
+}
+
 pub fn get_default_mirrors() -> Vec<PipMirror> {
     vec![
         PipMirror {
@@ -59,6 +72,9 @@ async fn get_current_mirror() -> Option<String> {
 }
 
 pub async fn switch_pip_mirror(app_handle: AppHandle, mirror_name: String, mirror_url: String) -> Result<String, String> {
+    if let Err(e) = validate_mirror_url(&mirror_url) {
+        return Err(e);
+    }
     let result = process_manager::execute_command(
         "pip",
         &["config", "set", "global.index-url", &mirror_url]

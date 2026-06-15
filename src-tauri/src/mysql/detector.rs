@@ -177,7 +177,7 @@ async fn get_mysql_port(
 ) -> Option<u16> {
     for config_path in collect_config_file_candidates(bin_path, service_name) {
         if config_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&config_path) {
+            if let Ok(content) = tokio::fs::read_to_string(&config_path).await {
                 if let Some(port) = parse_port_from_config(&content) {
                     return Some(port);
                 }
@@ -352,8 +352,8 @@ async fn scan_directories_for_mysql() -> Vec<String> {
     for base_path in common_paths {
         let base = Path::new(base_path);
         if base.exists() && base.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(base) {
-                for entry in entries.flatten() {
+            if let Ok(mut entries) = tokio::fs::read_dir(base).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
                     let path = entry.path();
                     if path.is_dir() {
                         let bin_path = path.join("bin");
@@ -458,7 +458,7 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> MySQLInfo {
                 };
                 
                 let result = process_manager::execute_command(
-                    exe_to_check.to_str().unwrap(),
+                    exe_to_check.to_str().unwrap_or(""),
                     &["--version"]
                 ).await;
                 
@@ -516,7 +516,7 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> MySQLInfo {
         };
         
         let result = process_manager::execute_command(
-            exe_to_check.to_str().unwrap(),
+            exe_to_check.to_str().unwrap_or(""),
             &["--version"]
         ).await;
         
@@ -555,8 +555,8 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> MySQLInfo {
         for base_path in search_paths {
             let base = Path::new(base_path);
             if base.exists() {
-                if let Ok(entries) = std::fs::read_dir(base) {
-                    for entry in entries.flatten() {
+                if let Ok(mut entries) = tokio::fs::read_dir(base).await {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
                         let path = entry.path();
                         if path.is_dir() {
                             let bin_path = path.join("bin");
@@ -567,7 +567,7 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> MySQLInfo {
                                 for exe in [mysql_exe, mysqld_exe] {
                                     if exe.exists() {
                                         let result = process_manager::execute_command(
-                                            exe.to_str().unwrap(),
+                                            exe.to_str().unwrap_or(""),
                                             &["--version"]
                                         ).await;
                                         if let Ok(output) = result {
@@ -580,12 +580,12 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> MySQLInfo {
                                                         let status = check_service_status(service).await;
                                                         if status != "未安装" {
                                                             found_service = Some(service.to_string());
-                                                            let port = get_mysql_port(bin_path.to_str().unwrap(), Some(service)).await;
+                                                            let port = get_mysql_port(bin_path.to_str().unwrap_or(""), Some(service)).await;
                                                             instances.push(MySQLInstance {
                                                                 version: version.clone(),
                                                                 architecture: arch.clone(),
                                                                 status,
-                                                                path: bin_path.to_str().unwrap().to_string(),
+                                                                path: bin_path.to_str().unwrap_or("").to_string(),
                                                                 service_name: Some(service.to_string()),
                                                                 port,
                                                                 is_residual: false,
@@ -595,12 +595,12 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> MySQLInfo {
                                                     }
                                                     
                                                     if found_service.is_none() {
-                                                        let port = get_mysql_port(bin_path.to_str().unwrap(), None).await;
+                                                        let port = get_mysql_port(bin_path.to_str().unwrap_or(""), None).await;
                                                         instances.push(MySQLInstance {
                                                             version,
                                                             architecture: arch,
                                                             status: "未安装服务".to_string(),
-                                                            path: bin_path.to_str().unwrap().to_string(),
+                                                            path: bin_path.to_str().unwrap_or("").to_string(),
                                                             service_name: None,
                                                             port,
                                                             is_residual: false,

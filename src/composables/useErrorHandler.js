@@ -21,7 +21,9 @@ export function addError(error, context = 'unknown') {
   errors.value.push(errorInfo)
   hasError.value = true
   
-  console.error(`[${context}]`, error)
+  if (import.meta.env.DEV) {
+    console.error(`[${context}]`, error)
+  }
   
   return errorInfo
 }
@@ -57,25 +59,9 @@ export async function withErrorHandler(fn, context = 'async', onError = null) {
     if (onError) {
       onError(error, errorInfo)
     }
-    throw error
-  }
-}
-
-/**
- * 安全的同步错误处理包装器
- * @param {Function} fn - 要执行的函数
- * @param {string} context - 上下文描述
- * @param {Function} onError - 可选的错误处理回调
- */
-export function withSyncErrorHandler(fn, context = 'sync', onError = null) {
-  try {
-    return fn()
-  } catch (error) {
-    const errorInfo = addError(error, context)
-    if (onError) {
-      onError(error, errorInfo)
+    if (!onError) {
+      throw error
     }
-    throw error
   }
 }
 
@@ -86,7 +72,6 @@ export function useErrorHandler() {
     addError,
     clearErrors,
     removeError,
-    withErrorHandler,
-    withSyncErrorHandler
+    withErrorHandler
   }
 }

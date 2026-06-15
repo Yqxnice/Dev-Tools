@@ -3,13 +3,26 @@ use regex::Regex;
 use reqwest;
 use tauri::{AppHandle, Emitter};
 use once_cell::sync::Lazy;
-use std::fs::File;
-use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 use futures_util::StreamExt;
+use tokio::io::AsyncWriteExt;
 
 static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r#"href="(\d+\.\d+\.\d+)/""#).unwrap());
 static STABLE_VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+\.\d+\.\d+$").unwrap());
+
+pub fn validate_install_path(path: &str) -> Result<(), String> {
+    if path.is_empty() {
+        return Err("安装路径不能为空".into());
+    }
+    if path.contains("..") {
+        return Err("安装路径不能包含 ..".into());
+    }
+    if !std::path::Path::new(path).is_absolute() {
+        return Err("安装路径必须是绝对路径".into());
+    }
+    Ok(())
+}
 
 const MIRRORS: &[(&str, &str)] = &[
     ("华为云", "https://mirrors.huaweicloud.com/python/"),
@@ -18,8 +31,26 @@ const MIRRORS: &[(&str, &str)] = &[
     ("官方", "https://www.python.org/ftp/python/"),
 ];
 
+pub fn validate_version_string(version: &str) -> Result<(), String> {
+    if version.is_empty() {
+        return Err("版本号不能为空".into());
+    }
+    if !STABLE_VERSION_REGEX.is_match(version) {
+        return Err("版本号格式无效".into());
+    }
+    if version.contains("..") || version.contains('/') || version.contains('\\') {
+        return Err("版本号包含非法字符".into());
+    }
+    Ok(())
+}
+
 async fn fetch_versions_from_mirror(mirror_url: &str) -> Result<Vec<String>, String> {
-    let response = reqwest::get(mirror_url)
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("创建请求客户端失败: {}", e))?;
+    let response = client.get(mirror_url)
+        .send()
         .await
         .map_err(|e| format!("请求失败: {}", e))?;
 
@@ -113,14 +144,13 @@ pub fn get_download_url(version: &str) -> String {
     )
 }
 
-fn get_download_dir() -> PathBuf {
+async fn get_download_dir() -> PathBuf {
     if let Some(dir) = dirs::desktop_dir() {
-        // 下载到桌面
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = tokio::fs::create_dir_all(&dir).await;
         dir
     } else if let Some(mut dir) = dirs::download_dir() {
         dir.push("PythonInstallers");
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = tokio::fs::create_dir_all(&dir).await;
         dir
     } else {
         PathBuf::from(".")
@@ -132,14 +162,20 @@ pub async fn download_python(
     version: String,
     window: tauri::Window,
 ) -> Result<PathBuf, String> {
+    validate_version_string(&version)?;
     let download_url = get_download_url(&version);
     logger::info(&app_handle, &format!("开始下载 Python {}", version));
     
     let arch = get_system_architecture();
-    let download_dir = get_download_dir();
+    let download_dir = get_download_dir().await;
     let file_path = download_dir.join(format!("python-{}-{}.exe", version, arch));
     
-    let response = reqwest::get(&download_url)
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("创建请求客户端失败: {}", e))?;
+    let response = client.get(&download_url)
+        .send()
         .await
         .map_err(|e| format!("下载请求失败: {}", e))?;
     
@@ -148,7 +184,8 @@ pub async fn download_python(
     }
     
     let total_size = response.content_length().unwrap_or(0);
-    let mut file = File::create(&file_path)
+    let mut file = tokio::fs::File::create(&file_path)
+        .await
         .map_err(|e| format!("创建文件失败: {}", e))?;
     
     let mut stream = response.bytes_stream();
@@ -157,7 +194,7 @@ pub async fn download_python(
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("下载数据失败: {}", e))?;
         downloaded += chunk.len() as u64;
-        file.write_all(&chunk).map_err(|e| format!("写入文件失败: {}", e))?;
+        file.write_all(&chunk).await.map_err(|e| format!("写入文件失败: {}", e))?;
         
         let percentage = if total_size > 0 {
             (downloaded as f64 / total_size as f64) * 100.0
@@ -217,6 +254,9 @@ pub async fn install_python(
     
     // 如果指定了自定义安装路径，添加安装路径参数
     if let Some(ref path) = install_path {
+        if let Err(e) = validate_install_path(path) {
+            return Err(e);
+        }
         install_args.push(format!("TargetDir={}", path));
     }
     
@@ -310,7 +350,7 @@ pub async fn download_python_only(
     window.emit("install_progress", &final_progress)
         .map_err(|e| format!("发送进度事件失败: {}", e))?;
     
-    Ok(installer_path.to_str().unwrap().to_string())
+    Ok(installer_path.to_str().unwrap_or("").to_string())
 }
 
 pub async fn download_and_install_python(
@@ -323,7 +363,7 @@ pub async fn download_and_install_python(
     let installer_path = download_python(app_handle.clone(), version.clone(), window.clone()).await?;
     
     // 2. 安装
-    install_python(app_handle, installer_path.to_str().unwrap().to_string(), version, install_path, window).await?;
+    install_python(app_handle, installer_path.to_str().unwrap_or("").to_string(), version, install_path, window).await?;
     
     Ok(())
 }

@@ -63,7 +63,7 @@ function saveCache(data) {
     cachedPythonInfo.value = data
   } catch (e) {
     emit('log', 'error', '保存缓存到 localStorage 失败')
-    console.error('保存缓存失败:', e)
+    if (import.meta.env.DEV) console.error('保存缓存失败:', e)
   }
 }
 
@@ -79,7 +79,7 @@ function clearCache() {
   } catch (e) {
     emit('log', 'error', '清除缓存时发生错误')
     emit('log', 'error', `错误信息: ${e}`)
-    console.error('清除缓存失败:', e)
+    if (import.meta.env.DEV) console.error('清除缓存失败:', e)
     emit('toast', '清除缓存失败', 'error')
   }
 }
@@ -100,23 +100,31 @@ const downloadProgress = ref(null)
 const downloadingVersion = ref(null) // 当前正在下载的版本
 
 // 获取当前窗口
-const window = getCurrentWindow()
+let appWindow = null
+try {
+  appWindow = getCurrentWindow()
+} catch (e) {
+  // Not running in Tauri environment
+}
 
 // 事件监听器
 let unlistenDownload = null
 
 onMounted(async () => {
-  // 监听下载进度事件
-  unlistenDownload = await window.listen('download_progress', (event) => {
-    downloadProgress.value = event.payload
-    // 下载完成后重置状态
-    if (event.payload.completed) {
-      downloadingVersion.value = null
-      if (event.payload.success) {
-        showToast('Python 下载成功！', 'success')
+  if (!appWindow) return
+  try {
+    unlistenDownload = await appWindow.listen('download_progress', (event) => {
+      downloadProgress.value = event.payload
+      if (event.payload.completed) {
+        downloadingVersion.value = null
+        if (event.payload.success) {
+          showToast('Python 下载成功！', 'success')
+        }
       }
-    }
-  })
+    })
+  } catch (e) {
+    if (import.meta.env.DEV) console.warn('监听下载进度事件失败:', e)
+  }
 })
 
 onUnmounted(() => {
@@ -281,13 +289,6 @@ function getSystemArchitecture() {
   return 'amd64'
 }
 
-// 打开版本下载链接
-async function openDownloadUrl(version) {
-  const arch = getSystemArchitecture()
-  const url = `https://mirrors.huaweicloud.com/python/${version}/python-${version}-${arch}.exe`
-  await open(url)
-}
-
 // 格式化文件大小
 function formatFileSize(bytes) {
   if (!bytes) return '0 B'
@@ -331,7 +332,12 @@ async function downloadBrowser(version) {
   const arch = getSystemArchitecture()
   const url = `https://mirrors.huaweicloud.com/python/${version}/python-${version}-${arch}.exe`
   addLog('info', `在浏览器中打开下载链接: ${url}`)
-  await open(url)
+  try {
+    await open(url)
+  } catch (e) {
+    addLog('error', `打开浏览器失败: ${e}`)
+    showToast(`打开浏览器失败: ${e}`, 'error')
+  }
 }
 </script>
 

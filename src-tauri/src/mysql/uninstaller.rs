@@ -2,8 +2,9 @@ use super::super::{logger, process_manager};
 use tauri::AppHandle;
 
 pub async fn stop_mysql_services(app_handle: &AppHandle, services: Vec<String>) -> Result<(), String> {
-    for service in services {
-        match process_manager::execute_command("net", &["stop", &service]).await {
+    for service in &services {
+        process_manager::validate_service_name(service)?;
+        match process_manager::execute_command("net", &["stop", service]).await {
             Ok(output) => {
                 if output.exit_code == 0 {
                     logger::info(app_handle, &format!("服务 {} 已停止", service));
@@ -22,8 +23,9 @@ pub async fn stop_mysql_services(app_handle: &AppHandle, services: Vec<String>) 
 }
 
 pub async fn remove_mysql_services(app_handle: &AppHandle, services: Vec<String>) -> Result<(), String> {
-    for service in services {
-        match process_manager::execute_command("sc", &["delete", &service]).await {
+    for service in &services {
+        process_manager::validate_service_name(service)?;
+        match process_manager::execute_command("sc", &["delete", service]).await {
             Ok(output) => {
                 if output.exit_code == 0 {
                     logger::info(app_handle, &format!("服务 {} 已删除", service));
@@ -133,8 +135,7 @@ async fn uninstall_via_wmic(app_handle: &AppHandle) {
     .await
     {
         Ok(output) => {
-            if output.exit_code == 0 {
-            } else {
+            if output.exit_code != 0 {
                 logger::warn(
                     app_handle,
                     &format!(

@@ -1,6 +1,7 @@
 use super::uninstaller;
 use super::super::{logger, process_manager, types::MySQLInstance};
 use super::super::types::{CleanOptions, CleanResult, CleanScanResult, ScannedPath};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
@@ -153,61 +154,59 @@ async fn scan_registry_keys_for_instance(
     }
 
     if options.clean_registry_mysql_ab {
-        let script = format!(
-            r#"
-                $folder = '{}'
-                $pattern = '{}'
-                $roots = @(
-                    'HKLM:\SOFTWARE\MySQL AB',
-                    'HKLM:\SOFTWARE\WOW6432Node\MySQL AB'
-                )
-                foreach ($root in $roots) {{
-                    if (Test-Path $root) {{
-                        if ($root -match 'MySQL AB$') {{
-                            Get-ChildItem $root -ErrorAction SilentlyContinue | Where-Object {{
-                                $_.PSChildName -match $pattern -or $_.PSChildName -eq $folder
-                            }} | ForEach-Object {{
-                                $_.PSPath -replace '^Microsoft\.PowerShell\.Core\\Registry::', '' -replace '^HKEY_LOCAL_MACHINE', 'HKLM'
-                            }}
-                            if ($folder -match $pattern) {{
-                                $root -replace '^HKLM:', 'HKLM'
-                            }}
-                        }}
-                    }}
-                }}
-            "#,
-            targets.server_folder_name.replace('\'', "''"),
-            targets.version_pattern.replace('\'', "''"),
-        );
-        keys.extend(run_powershell_lines(&script).await);
+        let mut env_vars = HashMap::new();
+        env_vars.insert("FOLDER".into(), targets.server_folder_name.clone());
+        env_vars.insert("PATTERN".into(), targets.version_pattern.clone());
+        let script = r#"
+            $folder = $env:FOLDER
+            $pattern = $env:PATTERN
+            $roots = @(
+                'HKLM:\SOFTWARE\MySQL AB',
+                'HKLM:\SOFTWARE\WOW6432Node\MySQL AB'
+            )
+            foreach ($root in $roots) {
+                if (Test-Path $root) {
+                    if ($root -match 'MySQL AB$') {
+                        Get-ChildItem $root -ErrorAction SilentlyContinue | Where-Object {
+                            $_.PSChildName -match $pattern -or $_.PSChildName -eq $folder
+                        } | ForEach-Object {
+                            $_.PSPath -replace '^Microsoft\.PowerShell\.Core\\Registry::', '' -replace '^HKEY_LOCAL_MACHINE', 'HKLM'
+                        }
+                        if ($folder -match $pattern) {
+                            $root -replace '^HKLM:', 'HKLM'
+                        }
+                    }
+                }
+            }
+        "#;
+        keys.extend(run_powershell_lines_with_env(script, &env_vars).await);
     }
 
     if options.clean_registry_uninstall {
-        let script = format!(
-            r#"
-                $folder = '{}'
-                $pattern = '{}'
-                $roots = @(
-                    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
-                    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
-                )
-                foreach ($root in $roots) {{
-                    Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {{
-                        $item = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
-                        if ($item.DisplayName -and (
-                            $item.DisplayName -eq $folder -or
-                            $item.DisplayName -match "MySQL.*$pattern" -or
-                            $item.DisplayName -match "MariaDB.*$pattern"
-                        )) {{
-                            $_.PSPath -replace '^Microsoft\.PowerShell\.Core\\Registry::', '' -replace '^HKEY_LOCAL_MACHINE', 'HKLM'
-                        }}
-                    }}
-                }}
-            "#,
-            targets.server_folder_name.replace('\'', "''"),
-            targets.version_pattern.replace('\'', "''"),
-        );
-        keys.extend(run_powershell_lines(&script).await);
+        let mut env_vars = HashMap::new();
+        env_vars.insert("FOLDER".into(), targets.server_folder_name.clone());
+        env_vars.insert("PATTERN".into(), targets.version_pattern.clone());
+        let script = r#"
+            $folder = $env:FOLDER
+            $pattern = $env:PATTERN
+            $roots = @(
+                'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+            )
+            foreach ($root in $roots) {
+                Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+                    $item = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                    if ($item.DisplayName -and (
+                        $item.DisplayName -eq $folder -or
+                        $item.DisplayName -match "MySQL.*$pattern" -or
+                        $item.DisplayName -match "MariaDB.*$pattern"
+                    )) {
+                        $_.PSPath -replace '^Microsoft\.PowerShell\.Core\\Registry::', '' -replace '^HKEY_LOCAL_MACHINE', 'HKLM'
+                    }
+                }
+            }
+        "#;
+        keys.extend(run_powershell_lines_with_env(script, &env_vars).await);
     }
 
     if options.clean_odbc {
@@ -218,15 +217,14 @@ async fn scan_registry_keys_for_instance(
         } else {
             "MySQL ODBC"
         };
-        let script = format!(
-            r#"
-                Get-ChildItem 'HKLM:\SOFTWARE\ODBC\ODBCINST.INI' -ErrorAction SilentlyContinue |
-                    Where-Object {{ $_.PSChildName -match '{}' }} |
-                    ForEach-Object {{ 'HKLM\SOFTWARE\ODBC\ODBCINST.INI\' + $_.PSChildName }}
-            "#,
-            odbc_pattern.replace('\'', "''"),
-        );
-        keys.extend(run_powershell_lines(&script).await);
+        let mut env_vars = HashMap::new();
+        env_vars.insert("ODBC_PATTERN".into(), odbc_pattern.to_string());
+        let script = r#"
+            Get-ChildItem 'HKLM:\SOFTWARE\ODBC\ODBCINST.INI' -ErrorAction SilentlyContinue |
+                Where-Object { $_.PSChildName -match $env:ODBC_PATTERN } |
+                ForEach-Object { 'HKLM\SOFTWARE\ODBC\ODBCINST.INI\' + $_.PSChildName }
+        "#;
+        keys.extend(run_powershell_lines_with_env(script, &env_vars).await);
     }
 
     if options.clean_user_registry {
@@ -238,25 +236,24 @@ async fn scan_registry_keys_for_instance(
 
     // 追加扫描 MySQL Installer 产品缓存
     if options.clean_registry_installer {
-        let installer_script = format!(
-            r#"
-$verPattern = '{}'
+        let mut env_vars = HashMap::new();
+        env_vars.insert("VER_PATTERN".into(), targets.version_pattern.clone());
+        let installer_script = r#"
+$verPattern = $env:VER_PATTERN
 $paths = @('HKLM:\SOFTWARE\MySQL\Installer\Products','HKLM:\SOFTWARE\WOW6432Node\MySQL\Installer\Products')
-foreach($p in $paths){{
-    if(Test-Path $p){{
-        Get-ChildItem $p -ErrorAction SilentlyContinue | Where-Object {{
+foreach($p in $paths){
+    if(Test-Path $p){
+        Get-ChildItem $p -ErrorAction SilentlyContinue | Where-Object {
             $disp = $_.GetValue('DisplayName','')
             $prodVer = $_.GetValue('Version','')
             ($disp -match "MySQL Server" -and $disp -match $verPattern) -or ($prodVer -like "$verPattern*")
-        }} | ForEach-Object {{
+        } | ForEach-Object {
             $_.PSPath -replace '^Microsoft\.PowerShell\.Core\\Registry::','HKLM'
-        }}
-    }}
-}}
-"#,
-            targets.version_pattern.replace('\'',"''")
-        );
-        keys.extend(run_powershell_lines(&installer_script).await);
+        }
+    }
+}
+"#;
+        keys.extend(run_powershell_lines_with_env(installer_script, &env_vars).await);
     }
 
     keys.sort();
@@ -264,26 +261,35 @@ foreach($p in $paths){{
     keys
 }
 
-async fn run_powershell_lines(script: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    if let Ok(output) = process_manager::execute_command(
-        "powershell",
-        &["-NoProfile", "-Command", script],
-    )
-    .await
-    {
-        if output.exit_code == 0 {
-            lines.extend(
-                output
-                    .stdout
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(str::to_string),
-            );
-        }
+/// 使用环境变量传递参数执行 PowerShell 脚本，避免字符串注入
+async fn run_powershell_with_env(script: &str, env_vars: &HashMap<String, String>) -> String {
+    let mut command = tokio::process::Command::new("powershell");
+    command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]);
+    for (key, value) in env_vars {
+        command.env(key, value);
     }
-    lines
+    #[cfg(target_os = "windows")]
+    {
+        #[allow(unused_imports)]
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    match tokio::time::timeout(std::time::Duration::from_secs(30), command.output()).await {
+        Ok(Ok(output)) => String::from_utf8_lossy(&output.stdout).to_string(),
+        Ok(Err(_)) => String::new(),
+        Err(_) => String::new(), // timeout
+    }
+}
+
+/// 使用环境变量执行 PowerShell 脚本并返回非空行
+async fn run_powershell_lines_with_env(script: &str, env_vars: &HashMap<String, String>) -> Vec<String> {
+    let output = run_powershell_with_env(script, env_vars).await;
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 async fn scan_path_entries_for_instance(targets: &InstanceTargets) -> Vec<String> {
@@ -291,66 +297,64 @@ async fn scan_path_entries_for_instance(targets: &InstanceTargets) -> Vec<String
         .install_dir
         .as_deref()
         .unwrap_or("")
-        .replace('\\', "\\\\");
+        .to_string();
     let data = targets
         .program_data_dir
         .as_deref()
         .unwrap_or("")
-        .replace('\\', "\\\\");
+        .to_string();
 
     if install.is_empty() && data.is_empty() {
         return Vec::new();
     }
 
-    let script = format!(
-        r#"
-            $install = '{}'
-            $data = '{}'
-            $results = @()
-            foreach ($scope in @('Machine', 'User')) {{
-                $path = [Environment]::GetEnvironmentVariable('Path', $scope)
-                if ($path) {{
-                    $path -split ';' | Where-Object {{
-                        $_ -and (
-                            ($install -and $_ -like "*$install*") -or
-                            ($data -and $_ -like "*$data*")
-                        )
-                    }} | ForEach-Object {{ "[$scope] $_" }}
-                }}
-            }}
-            $results | Sort-Object -Unique
-        "#,
-        install.replace('\'', "''"),
-        data.replace('\'', "''"),
-    );
+    let mut env_vars = HashMap::new();
+    env_vars.insert("INSTALL".into(), install);
+    env_vars.insert("DATA".into(), data);
+    let script = r#"
+        $install = $env:INSTALL
+        $data = $env:DATA
+        $results = @()
+        foreach ($scope in @('Machine', 'User')) {
+            $path = [Environment]::GetEnvironmentVariable('Path', $scope)
+            if ($path) {
+                $path -split ';' | Where-Object {
+                    $_ -and (
+                        ($install -and $_ -like "*$install*") -or
+                        ($data -and $_ -like "*$data*")
+                    )
+                } | ForEach-Object { "[$scope] $_" }
+            }
+        }
+        $results | Sort-Object -Unique
+    "#;
 
-    run_powershell_lines(&script).await
+    run_powershell_lines_with_env(script, &env_vars).await
 }
 
 async fn scan_start_menu_shortcuts(targets: &InstanceTargets) -> Vec<String> {
-    let script = format!(
-        r#"
-            $verPattern = '{}'
-            $paths = @(
-                [Environment]::GetFolderPath('CommonPrograms'),
-                [Environment]::GetFolderPath('Programs')
-            )
-            $shortcuts = @()
-            foreach ($basePath in $paths) {{
-                if (-not (Test-Path $basePath)) {{ continue }}
-                $mysqlDir = Join-Path $basePath 'MySQL'
-                if (-not (Test-Path $mysqlDir)) {{ continue }}
-                Get-ChildItem -Path $mysqlDir -Directory -ErrorAction SilentlyContinue | Where-Object {{
-                    $_.Name -match $verPattern
-                }} | ForEach-Object {{
-                    $shortcuts += $_.FullName
-                }}
-            }}
-            $shortcuts
-        "#,
-        targets.version_pattern.replace('\'', "''")
-    );
-    run_powershell_lines(&script).await
+    let mut env_vars = HashMap::new();
+    env_vars.insert("VER_PATTERN".into(), targets.version_pattern.clone());
+    let script = r#"
+        $verPattern = $env:VER_PATTERN
+        $paths = @(
+            [Environment]::GetFolderPath('CommonPrograms'),
+            [Environment]::GetFolderPath('Programs')
+        )
+        $shortcuts = @()
+        foreach ($basePath in $paths) {
+            if (-not (Test-Path $basePath)) { continue }
+            $mysqlDir = Join-Path $basePath 'MySQL'
+            if (-not (Test-Path $mysqlDir)) { continue }
+            Get-ChildItem -Path $mysqlDir -Directory -ErrorAction SilentlyContinue | Where-Object {
+                $_.Name -match $verPattern
+            } | ForEach-Object {
+                $shortcuts += $_.FullName
+            }
+        }
+        $shortcuts
+    "#;
+    run_powershell_lines_with_env(script, &env_vars).await
 }
 
 async fn registry_key_exists(key: &str) -> bool {
@@ -481,7 +485,7 @@ async fn kill_instance_processes(
                 &[
                     "process",
                     "where",
-                    &format!(r#"ExecutablePath='{}'"#, path_str.replace('\\', "\\\\")),
+                    &format!(r#"ExecutablePath='{}'"#, path_str.replace('\\', "\\\\").replace('\'', "\\'")),
                     "call",
                     "terminate",
                 ],
@@ -537,7 +541,7 @@ async fn remove_instance_directories(
             logger::info(app_handle, &format!("目录不存在，跳过: {}", dir.path));
             continue;
         }
-        match std::fs::remove_dir_all(&dir.path) {
+        match tokio::fs::remove_dir_all(&dir.path).await {
             Ok(_) => {
                 result
                     .cleaned_items
@@ -570,39 +574,26 @@ async fn delete_registry_key(_app_handle: &AppHandle, key: &str) -> Result<(), S
         key.to_string()
     };
     
-    let script = format!(
-        r#"
-        try {{
-            Remove-Item -Path '{}' -Recurse -Force -ErrorAction Stop
-            Write-Output 'SUCCESS'
-        }} catch {{
-            Write-Output "ERROR: $($_.Exception.Message)"
-        }}
-        "#,
-        key_normalized.replace('\'', "''")
-    );
-    
-    let ps_result = process_manager::execute_command(
-        "powershell",
-        &["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script]
-    ).await;
-    
-    if let Ok(output) = ps_result {
-        if output.stdout.trim() == "SUCCESS" {
-            return Ok(());
-        } else {
-            return Err(format!(
-                "PowerShell 删除失败: {}",
-                if output.stderr.trim().is_empty() {
-                    output.stdout.trim()
-                } else {
-                    output.stderr.trim()
-                }
-            ));
-        }
+    let mut env_vars = HashMap::new();
+    env_vars.insert("REG_KEY".into(), key_normalized);
+    let script = r#"
+    try {
+        Remove-Item -Path $env:REG_KEY -Recurse -Force -ErrorAction Stop
+        Write-Output 'SUCCESS'
+    } catch {
+        Write-Output "ERROR: $($_.Exception.Message)"
     }
+    "#;
     
-    Err("所有删除方法都失败了".to_string())
+    let ps_output = run_powershell_with_env(script, &env_vars).await;
+    if ps_output.trim() == "SUCCESS" {
+        return Ok(());
+    } else {
+        return Err(format!(
+            "PowerShell 删除失败: {}",
+            if ps_output.trim().is_empty() { "无输出" } else { ps_output.trim() }
+        ));
+    }
 }
 
 async fn clean_registry(
@@ -656,11 +647,10 @@ async fn clean_registry(
 
 /// 尝试递归删除注册表项的子键（作为备份方案）
 async fn try_delete_registry_subkeys(
-    app_handle: &AppHandle,
+    _app_handle: &AppHandle,
     result: &mut CleanResult,
     key: &str,
 ) {
-    let _app_handle = app_handle; // 避免未使用变量警告
     let key_normalized = if key.starts_with("HKLM") {
         key.replace("HKLM", "HKLM:")
     } else if key.starts_with("HKCU") {
@@ -669,31 +659,26 @@ async fn try_delete_registry_subkeys(
         key.to_string()
     };
     
-    let script = format!(
-        r#"
-        try {{
-            $path = '{}'
-            if (Test-Path $path) {{
-                Get-ChildItem -Path $path -ErrorAction SilentlyContinue | ForEach-Object {{
-                    try {{
-                        Remove-Item -Path $_.PSPath -Recurse -Force -ErrorAction Stop
-                        Write-Output "DELETED: $($_.PSPath)"
-                    }} catch {{}}
-                }}
-            }}
-        }} catch {{}}
-        "#,
-        key_normalized.replace('\'', "''")
-    );
-    
-    if let Ok(output) = process_manager::execute_command(
-        "powershell",
-        &["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script]
-    ).await {
-        for line in output.stdout.lines() {
-            if line.trim().starts_with("DELETED:") {
-                result.cleaned_items.push(format!("删除注册表子项: {}", line.trim_start_matches("DELETED:").trim()));
+    let mut env_vars = HashMap::new();
+    env_vars.insert("REG_PATH".into(), key_normalized);
+    let script = r#"
+    try {
+        $path = $env:REG_PATH
+        if (Test-Path $path) {
+            Get-ChildItem -Path $path -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    Remove-Item -Path $_.PSPath -Recurse -Force -ErrorAction Stop
+                    Write-Output "DELETED: $($_.PSPath)"
+                } catch {}
             }
+        }
+    } catch {}
+    "#;
+    
+    let output = run_powershell_with_env(script, &env_vars).await;
+    for line in output.lines() {
+        if line.trim().starts_with("DELETED:") {
+            result.cleaned_items.push(format!("删除注册表子项: {}", line.trim_start_matches("DELETED:").trim()));
         }
     }
 }
@@ -710,7 +695,7 @@ async fn clean_start_menu_shortcuts(
     }
 
     for path in shortcuts {
-        match std::fs::remove_dir_all(&path) {
+        match tokio::fs::remove_dir_all(&path).await {
             Ok(_) => {
                 result.cleaned_items.push(format!("删除开始菜单快捷方式目录: {}", path));
                 logger::info(app_handle, &format!("已删除开始菜单快捷方式: {}", path));
@@ -731,57 +716,45 @@ async fn clean_path_entries_for_instance(
         .install_dir
         .as_deref()
         .unwrap_or("")
-        .replace('\\', "\\\\")
-        .replace('\'', "''");
+        .to_string();
     let data = targets
         .program_data_dir
         .as_deref()
         .unwrap_or("")
-        .replace('\\', "\\\\")
-        .replace('\'', "''");
+        .to_string();
 
-    let script = format!(
-        r#"
-            $install = '{}'
-            $data = '{}'
-            $changed = @()
-            foreach ($scope in @('Machine', 'User')) {{
-                $path = [Environment]::GetEnvironmentVariable('Path', $scope)
-                if (-not $path) {{ continue }}
-                $parts = $path -split ';' | Where-Object {{
-                    $_ -and -not (
-                        ($install -and $_ -like "*$install*") -or
-                        ($data -and $_ -like "*$data*")
-                    )
-                }}
-                $newPath = ($parts -join ';').TrimEnd(';')
-                if ($newPath -ne $path) {{
-                    [Environment]::SetEnvironmentVariable('Path', $newPath, $scope)
-                    $changed += $scope
-                }}
-            }}
-            if ($changed.Count -gt 0) {{ 'UPDATED:' + ($changed -join ',') }} else {{ 'NONE' }}
-        "#,
-        install, data
-    );
-
-    match process_manager::execute_command("powershell", &["-NoProfile", "-Command", &script]).await
-    {
-        Ok(output) if output.exit_code == 0 => {
-            let stdout = output.stdout.trim();
-            if stdout.starts_with("UPDATED:") {
-                result.cleaned_items.push(format!(
-                    "已清理实例相关 PATH: {}",
-                    stdout.trim_start_matches("UPDATED:")
-                ));
+    let mut env_vars = HashMap::new();
+    env_vars.insert("INSTALL".into(), install);
+    env_vars.insert("DATA".into(), data);
+    let script = r#"
+        $install = $env:INSTALL
+        $data = $env:DATA
+        $changed = @()
+        foreach ($scope in @('Machine', 'User')) {
+            $path = [Environment]::GetEnvironmentVariable('Path', $scope)
+            if (-not $path) { continue }
+            $parts = $path -split ';' | Where-Object {
+                $_ -and -not (
+                    ($install -and $_ -like "*$install*") -or
+                    ($data -and $_ -like "*$data*")
+                )
+            }
+            $newPath = ($parts -join ';').TrimEnd(';')
+            if ($newPath -ne $path) {
+                [Environment]::SetEnvironmentVariable('Path', $newPath, $scope)
+                $changed += $scope
             }
         }
-        Ok(output) => {
-            result
-                .errors
-                .push(format!("清理 PATH 失败: {}", output.stderr.trim()));
-        }
-        Err(e) => result.errors.push(format!("清理 PATH 异常: {}", e)),
+        if ($changed.Count -gt 0) { 'UPDATED:' + ($changed -join ',') } else { 'NONE' }
+    "#;
+
+    let output = run_powershell_with_env(script, &env_vars).await;
+    let stdout = output.trim();
+    if stdout.starts_with("UPDATED:") {
+        result.cleaned_items.push(format!(
+            "已清理实例相关 PATH: {}",
+            stdout.trim_start_matches("UPDATED:")
+        ));
     }
 }
 

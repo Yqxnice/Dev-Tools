@@ -24,8 +24,8 @@ async fn scan_virtual_environments(app_handle: &AppHandle) -> Vec<PythonEnvironm
 
     for location in common_locations.into_iter().flatten() {
         if location.exists() && location.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&location) {
-                for entry in entries.flatten() {
+            if let Ok(mut entries) = tokio::fs::read_dir(&location).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
                     let entry_path = entry.path();
                     if entry_path.is_dir() {
                         if let Some(env) = check_virtual_env(&entry_path, app_handle).await {

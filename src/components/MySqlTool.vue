@@ -31,12 +31,12 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['log', 'toast', 'loading'])
+const emit = defineEmits(['log', 'toast', 'loading', 'switch-feature'])
 
 // 缓存的 MySQL 信息
-let cachedMySQLInfo = null
+const cachedMySQLInfo = ref(null)
 // 卸载时的实例数据
-let uninstallInstances = []
+const uninstallInstances = ref([])
 
 // 版本信息状态
 const versionInfo = ref(null)
@@ -50,7 +50,7 @@ const operatingInstances = ref(new Set())
 // 监听 initialData 变化
 watch(() => props.initialData, (newVal) => {
   if (newVal && !versionInfo.value) {
-    cachedMySQLInfo = newVal
+    cachedMySQLInfo.value = newVal
     versionInfo.value = newVal
   }
 }, { immediate: true })
@@ -97,7 +97,7 @@ async function handleStopService(inst, index) {
 async function refreshInstanceStatus() {
   try {
     addLog('info', '正在刷新实例状态...')
-    const result = await detectAndCacheMySQL(true)
+    await detectAndCacheMySQL(true)
     addLog('info', '实例状态刷新完成')
   } catch (error) {
     addLog('error', `刷新状态失败: ${error}`)
@@ -194,10 +194,10 @@ watch(selectedResidueInstance, (inst) => {
 
 // 计算属性：是否已全选
 const isAllSelected = computed(() => {
-  if (!uninstallInstances || uninstallInstances.length === 0) return false
-  const allWithService = uninstallInstances
+  if (!uninstallInstances.value || uninstallInstances.value.length === 0) return false
+  const allWithService = uninstallInstances.value
     .map((_, idx) => idx)
-    .filter(idx => uninstallInstances[idx].service_name)
+    .filter(idx => uninstallInstances.value[idx].service_name)
   return formData.autoUninstall.selectedInstances.length === allWithService.length
 })
 
@@ -219,11 +219,11 @@ function saveCache(data) {
       timestamp: Date.now()
     }
     localStorage.setItem('mysql_manager_cache', JSON.stringify(toSave))
-    cachedMySQLInfo = data
+    cachedMySQLInfo.value = data
     versionInfo.value = data
   } catch (e) {
     addLog('error', '保存缓存到 localStorage 失败')
-    console.error('保存缓存失败:', e)
+    if (import.meta.env.DEV) console.error('保存缓存失败:', e)
   }
 }
 
@@ -232,14 +232,14 @@ function clearCache() {
   try {
     addLog('info', '正在清除 localStorage 中的 MySQL 实例缓存...')
     localStorage.removeItem('mysql_manager_cache')
-    cachedMySQLInfo = null
+    cachedMySQLInfo.value = null
     versionInfo.value = null
     addLog('info', '缓存数据已清空')
     showToast('缓存已清除', 'success')
   } catch (e) {
     addLog('error', '清除缓存时发生错误')
     addLog('error', `错误信息: ${e}`)
-    console.error('清除缓存失败:', e)
+    if (import.meta.env.DEV) console.error('清除缓存失败:', e)
     showToast('清除缓存失败', 'error')
   }
 }
@@ -285,11 +285,11 @@ async function handleVersionCheck() {
 async function checkForUninstall() {
   try {
     addLog('info', '========== 开始检测可卸载实例 ==========')
-    let result = cachedMySQLInfo
+    let result = cachedMySQLInfo.value
     if (!result) {
       result = await detectAndCacheMySQL(true)
     }
-    uninstallInstances = result.instances
+    uninstallInstances.value = result.instances
     formData.autoUninstall.selectedInstances = []
   } catch (error) {
     addLog('error', `检测失败: ${error}`)
@@ -302,7 +302,7 @@ async function handleAutoUninstall() {
     addLog('info', '========== 开始卸载流程 ==========')
 
     const selectedServices = formData.autoUninstall.selectedInstances
-      .map(i => uninstallInstances[i].service_name)
+      .map(i => uninstallInstances.value[i].service_name)
       .filter(n => n)
 
     await invoke('uninstall_mysql', { services: selectedServices.length > 0 ? selectedServices : null })
@@ -318,9 +318,9 @@ async function handleAutoUninstall() {
 
 // 全选/取消全选
 function toggleSelectAll() {
-  const allWithService = uninstallInstances
+  const allWithService = uninstallInstances.value
     .map((_, idx) => idx)
-    .filter(idx => uninstallInstances[idx].service_name)
+    .filter(idx => uninstallInstances.value[idx].service_name)
 
   if (formData.autoUninstall.selectedInstances.length === allWithService.length) {
     addLog('info', '取消全选 - 清空选中的实例')
@@ -869,7 +869,8 @@ defineExpose({
         </div>
         <div class="form-group">
           <label>新密码</label>
-          <input v-model="formData.passwordReset.newPassword" type="password" placeholder="请输入新密码" />
+          <input v-model="formData.passwordReset.newPassword" type="password" placeholder="至少 8 个字符，包含字母和数字" />
+          <span class="password-hint">至少 8 个字符，需包含大写字母、小写字母、数字、特殊字符中的至少 2 种</span>
         </div>
         <div class="form-group">
           <label>确认密码</label>
@@ -962,7 +963,8 @@ defineExpose({
         </div>
         <div class="form-group">
           <label>新密码</label>
-          <input v-model="formData.passwordChange.newPassword" type="password" placeholder="请输入新密码" />
+          <input v-model="formData.passwordChange.newPassword" type="password" placeholder="至少 8 个字符，包含字母和数字" />
+          <span class="password-hint">至少 8 个字符，需包含大写字母、小写字母、数字、特殊字符中的至少 2 种</span>
         </div>
         <div class="form-group">
           <label>确认密码</label>
@@ -1111,6 +1113,14 @@ defineExpose({
   outline: none;
   border-color: var(--color-primary-accent);
   box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.1);
+}
+
+.password-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--color-neutral-text-muted);
+  margin-top: 4px;
+  line-height: 1.4;
 }
 
 .action-section {

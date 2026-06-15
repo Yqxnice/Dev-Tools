@@ -5,6 +5,7 @@ use once_cell::sync::Lazy;
 use std::path::Path;
 use tauri::AppHandle;
 use std::env;
+use futures_util::future::join_all;
 
 static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"Python (\d+\.\d+\.\d+)").unwrap());
 
@@ -91,22 +92,25 @@ async fn try_detect_with_py(_app_handle: &AppHandle) -> Vec<PythonVersion> {
     let result = process_manager::execute_command("py", &["-0p"]).await;
     if let Ok(output) = result {
         if output.exit_code == 0 {
-            // 尝试直接检测 py -3, py -2 等
-            for major in 3..=3 {
-                for minor in 6..=14 {
-                    let version_arg = format!("-{}.{}", major, minor);
+            let mut futures = Vec::new();
+            for minor in 6..=14 {
+                let version_arg = format!("-3.{}", minor);
+                futures.push(async move {
                     let path_result = process_manager::execute_command("py", &[&version_arg, "-c", "import sys; print(sys.executable)"]).await;
                     if let Ok(path_out) = path_result {
                         if path_out.exit_code == 0 {
-                            let exe_path = path_out.stdout.trim();
+                            let exe_path = path_out.stdout.trim().to_string();
                             if !exe_path.is_empty() {
-                                if let Some(py_ver) = check_python_at_path(exe_path).await {
-                                    versions.push(py_ver);
-                                }
+                                return check_python_at_path(&exe_path).await;
                             }
                         }
                     }
-                }
+                    None
+                });
+            }
+            let results = join_all(futures).await;
+            for result in results.into_iter().flatten() {
+                versions.push(result);
             }
         }
     }
@@ -151,8 +155,8 @@ async fn try_detect_from_appdata(_app_handle: &AppHandle) -> Vec<PythonVersion> 
         let appdata_local = user_dir.join("AppData").join("Local").join("Programs").join("Python");
         
         if appdata_local.exists() && appdata_local.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(appdata_local) {
-                for entry in entries.flatten() {
+            if let Ok(mut entries) = tokio::fs::read_dir(appdata_local).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
                     let entry_path = entry.path();
                     if entry_path.is_dir() {
                         let python_exe = entry_path.join("python.exe");
