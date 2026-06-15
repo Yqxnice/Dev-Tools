@@ -12,6 +12,8 @@ lerna-debug.log*
 node_modules
 dist
 src-tauri/target
+coverage
+.vitest
 dist-ssr
 *.local
 

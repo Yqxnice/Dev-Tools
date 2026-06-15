@@ -1,4 +1,4 @@
-use super::super::{logger, types::{AvailablePythonVersion, DownloadProgress, InstallProgress}};
+use super::super::{logger, types::{AvailablePythonVersion, DownloadProgress}};
 use regex::Regex;
 use reqwest;
 use tauri::{AppHandle, Emitter};
@@ -10,19 +10,6 @@ use tokio::io::AsyncWriteExt;
 
 static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r#"href="(\d+\.\d+\.\d+)/""#).unwrap());
 static STABLE_VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+\.\d+\.\d+$").unwrap());
-
-pub fn validate_install_path(path: &str) -> Result<(), String> {
-    if path.is_empty() {
-        return Err("安装路径不能为空".into());
-    }
-    if path.contains("..") {
-        return Err("安装路径不能包含 ..".into());
-    }
-    if !std::path::Path::new(path).is_absolute() {
-        return Err("安装路径必须是绝对路径".into());
-    }
-    Ok(())
-}
 
 const MIRRORS: &[(&str, &str)] = &[
     ("华为云", "https://mirrors.huaweicloud.com/python/"),
@@ -208,124 +195,82 @@ pub async fn download_python(
             total: total_size,
             percentage,
             status: "下载中".to_string(),
+            completed: false,
+            success: false,
         };
         
         window.emit("download_progress", &progress)
             .map_err(|e| format!("发送进度事件失败: {}", e))?;
     }
     
+    // 发送完成事件
+    let final_progress = DownloadProgress {
+        version: version.clone(),
+        downloaded: total_size,
+        total: total_size,
+        percentage: 100.0,
+        status: "下载完成".to_string(),
+        completed: true,
+        success: true,
+    };
+    window.emit("download_progress", &final_progress)
+        .map_err(|e| format!("发送下载完成事件失败: {}", e))?;
+    
     logger::info(&app_handle, "下载完成");
     Ok(file_path)
 }
 
-pub async fn install_python(
-    app_handle: AppHandle,
-    installer_path: String,
-    version: String,
-    install_path: Option<String>,
-    window: tauri::Window,
-) -> Result<(), String> {
-    logger::info(&app_handle, &format!("开始安装 Python {}", version));
-    
-    let emit_progress = |phase: &str, message: &str, percentage: u32| {
-        let progress = InstallProgress {
-            version: version.clone(),
-            phase: phase.to_string(),
-            message: message.to_string(),
-            percentage,
-            completed: false,
-            success: false,
-            error: None,
-        };
-        window.emit("install_progress", &progress).ok();
-    };
-    
-    emit_progress("准备", "准备安装环境", 5);
-    
-    // 静默安装参数
-    let mut install_args = vec![
-        "/quiet".to_string(),
-        "InstallAllUsers=0".to_string(),
-        "PrependPath=1".to_string(),
-        "Include_test=0".to_string(),
-        "Include_launcher=1".to_string(),
-        "AssociateFiles=1".to_string(),
-    ];
-    
-    // 如果指定了自定义安装路径，添加安装路径参数
-    if let Some(ref path) = install_path {
-        if let Err(e) = validate_install_path(path) {
-            return Err(e);
-        }
-        install_args.push(format!("TargetDir={}", path));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_version_string_rejects_empty() {
+        assert!(validate_version_string("").is_err());
     }
-    
-    emit_progress("安装", "正在运行安装程序", 20);
-    
-    // 直接使用 tokio::process 运行，不使用超时限制
-    use tokio::process::Command;
-    let result = Command::new(&installer_path)
-        .args(&install_args)
-        .output()
-        .await;
-    
-    emit_progress("安装", "安装程序执行中", 60);
-    
-    match result {
-        Ok(output) if output.status.success() || output.status.code() == Some(1641) || output.status.code() == Some(3010) => {
-            // 0 = 成功, 1641 = 需要重启, 3010 = 已安装但需要重启
-            logger::info(&app_handle, &format!("Python {} 安装成功", version));
-            
-            let final_progress = InstallProgress {
-                version: version.clone(),
-                phase: "完成".to_string(),
-                message: "Python 安装成功!".to_string(),
-                percentage: 100,
-                completed: true,
-                success: true,
-                error: None,
-            };
-            window.emit("install_progress", &final_progress)
-                .map_err(|e| format!("发送进度事件失败: {}", e))?;
-            
-            Ok(())
-        }
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let exit_code = output.status.code().unwrap_or(-1);
-            let error_msg = format!("安装失败 (退出码: {}): {}", exit_code, stderr);
-            logger::error(&app_handle, &error_msg);
-            
-            let final_progress = InstallProgress {
-                version: version.clone(),
-                phase: "失败".to_string(),
-                message: error_msg.clone(),
-                percentage: 100,
-                completed: true,
-                success: false,
-                error: Some(error_msg.clone()),
-            };
-            window.emit("install_progress", &final_progress).ok();
-            
-            Err(error_msg)
-        }
-        Err(e) => {
-            let error_msg = format!("执行安装程序失败: {}", e);
-            logger::error(&app_handle, &error_msg);
-            
-            let final_progress = InstallProgress {
-                version: version.clone(),
-                phase: "失败".to_string(),
-                message: error_msg.clone(),
-                percentage: 100,
-                completed: true,
-                success: false,
-                error: Some(error_msg.clone()),
-            };
-            window.emit("install_progress", &final_progress).ok();
-            
-            Err(error_msg)
-        }
+
+    #[test]
+    fn validate_version_string_rejects_invalid_format() {
+        assert!(validate_version_string("3").is_err());
+        assert!(validate_version_string("3.12").is_err());
+        assert!(validate_version_string("abc").is_err());
+    }
+
+    #[test]
+    fn validate_version_string_rejects_path_traversal() {
+        assert!(validate_version_string("3.12.0/../").is_err());
+        assert!(validate_version_string("3.12.0\\windows").is_err());
+    }
+
+    #[test]
+    fn validate_version_string_accepts_valid() {
+        assert!(validate_version_string("3.12.0").is_ok());
+        assert!(validate_version_string("3.11.5").is_ok());
+        assert!(validate_version_string("3.10.11").is_ok());
+    }
+
+    #[test]
+    fn get_download_url_uses_huawei_mirror() {
+        let url = get_download_url("3.12.0");
+        assert!(url.contains("mirrors.huaweicloud.com"));
+        assert!(url.contains("python-3.12.0-"));
+        assert!(url.ends_with(".exe"));
+    }
+
+    #[test]
+    fn get_system_architecture_returns_non_empty() {
+        let arch = get_system_architecture();
+        assert!(!arch.is_empty());
+        assert!(arch == "amd64" || arch == "win32" || arch == "arm64");
+    }
+
+    #[test]
+    fn stable_version_regex_matches_valid() {
+        assert!(STABLE_VERSION_REGEX.is_match("3.12.0"));
+        assert!(STABLE_VERSION_REGEX.is_match("3.11.5"));
+        assert!(STABLE_VERSION_REGEX.is_match("2.7.18"));
+        assert!(!STABLE_VERSION_REGEX.is_match("3.12.0rc1"));
+        assert!(!STABLE_VERSION_REGEX.is_match("3.12"));
     }
 }
 
@@ -335,35 +280,6 @@ pub async fn download_python_only(
     version: String,
     window: tauri::Window,
 ) -> Result<String, String> {
-    let installer_path = download_python(app_handle.clone(), version.clone(), window.clone()).await?;
-    
-    // 发送完成进度事件
-    let final_progress = InstallProgress {
-        version: version.clone(),
-        phase: "完成".to_string(),
-        message: "下载完成!".to_string(),
-        percentage: 100,
-        completed: true,
-        success: true,
-        error: None,
-    };
-    window.emit("install_progress", &final_progress)
-        .map_err(|e| format!("发送进度事件失败: {}", e))?;
-    
+    let installer_path = download_python(app_handle, version, window).await?;
     Ok(installer_path.to_str().unwrap_or("").to_string())
-}
-
-pub async fn download_and_install_python(
-    app_handle: AppHandle,
-    version: String,
-    install_path: Option<String>,
-    window: tauri::Window,
-) -> Result<(), String> {
-    // 1. 下载
-    let installer_path = download_python(app_handle.clone(), version.clone(), window.clone()).await?;
-    
-    // 2. 安装
-    install_python(app_handle, installer_path.to_str().unwrap_or("").to_string(), version, install_path, window).await?;
-    
-    Ok(())
 }

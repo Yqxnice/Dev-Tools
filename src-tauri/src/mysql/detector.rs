@@ -394,7 +394,7 @@ pub async fn start_mysql_service(app_handle: AppHandle, service_name: String) ->
         }
         Err(e) => {
             logger::error(&app_handle, &format!("启动 MySQL 服务异常: {}", e));
-            Err(e)
+            Err(e.to_string())
         }
     }
 }
@@ -421,7 +421,7 @@ pub async fn stop_mysql_service(app_handle: AppHandle, service_name: String) -> 
         }
         Err(e) => {
             logger::error(&app_handle, &format!("停止 MySQL 服务异常: {}", e));
-            Err(e)
+            Err(e.to_string())
         }
     }
 }

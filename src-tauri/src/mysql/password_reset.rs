@@ -3,19 +3,37 @@ use super::detector;
 use std::path::PathBuf;
 use tauri::AppHandle;
 
+/// Drop guard 确保临时配置文件被清理（即使 panic 也执行）
+struct TempConfigGuard {
+    path: Option<PathBuf>,
+}
+
+impl TempConfigGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn path(&self) -> &PathBuf {
+        self.path.as_ref().unwrap()
+    }
+}
+
+impl Drop for TempConfigGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 /// 创建临时 MySQL 配置文件，避免密码出现在进程参数中
-async fn create_temp_mysql_config(password: &str) -> Result<PathBuf, String> {
+async fn create_temp_mysql_config(password: &str) -> Result<TempConfigGuard, String> {
     let temp_dir = std::env::temp_dir();
     let config_path = temp_dir.join(format!("devtools_mysql_{}.cnf", std::process::id()));
     let config_content = format!("[client]\nuser=root\npassword={}\n", password);
     tokio::fs::write(&config_path, &config_content).await
         .map_err(|e| format!("创建临时配置文件失败: {}", e))?;
-    Ok(config_path)
-}
-
-/// 清理临时 MySQL 配置文件
-async fn cleanup_temp_mysql_config(path: &PathBuf) {
-    let _ = tokio::fs::remove_file(path).await;
+    Ok(TempConfigGuard::new(config_path))
 }
 
 // 在 Windows 上隐藏控制台窗口，避免闪烁
@@ -70,28 +88,10 @@ pub fn escape_mysql_password(password: &str) -> String {
     result
 }
 
-/// 验证密码是否符合安全要求
+/// 使用 process_manager 中的密码强度验证
 pub fn validate_password_strength(password: &str) -> Result<(), String> {
-    if password.len() < 8 {
-        return Err("密码长度至少需要 8 个字符".to_string());
-    }
-    if password.len() > 128 {
-        return Err("密码长度不能超过 128 个字符".to_string());
-    }
-    let has_upper = password.chars().any(|c| c.is_ascii_uppercase());
-    let has_lower = password.chars().any(|c| c.is_ascii_lowercase());
-    let has_digit = password.chars().any(|c| c.is_ascii_digit());
-    let has_special = password.chars().any(|c| !c.is_ascii_alphanumeric());
-
-    let strength = [has_upper, has_lower, has_digit, has_special]
-        .iter()
-        .filter(|&&x| x)
-        .count();
-
-    if strength < 2 {
-        return Err("密码需包含大写字母、小写字母、数字、特殊字符中的至少 2 种".to_string());
-    }
-    Ok(())
+    process_manager::validate_password_strength(password)
+        .map_err(|e| e.to_user_message())
 }
 
 fn resolve_port(instance: &types::MySQLInstance, override_port: Option<u16>) -> Option<u16> {
@@ -302,7 +302,7 @@ async fn test_mysql_connection(
     }
     
     // 使用临时配置文件代替 -p 参数，避免密码泄露
-    let config_path = create_temp_mysql_config(password).await?;
+    let config_guard = create_temp_mysql_config(password).await?;
     
     // 增加重试机制
     let max_retries = 5;
@@ -313,7 +313,7 @@ async fn test_mysql_connection(
         logger::info(app_handle, &format!("连接测试尝试 {}/{}...", retry_count, max_retries));
         
         let mut args: Vec<String> = vec![
-            format!("--defaults-file={}", config_path.display()),
+            format!("--defaults-file={}", config_guard.path().display()),
             "-e".to_string(),
             test_sql.to_string(),
         ];
@@ -328,7 +328,6 @@ async fn test_mysql_connection(
         let mysql_path_str = match mysql_path.to_str() {
             Some(s) => s,
             None => {
-                cleanup_temp_mysql_config(&config_path).await;
                 logger::error(app_handle, "MySQL 路径无效");
                 return Err("MySQL 路径无效".to_string());
             }
@@ -350,7 +349,6 @@ async fn test_mysql_connection(
                 }
                 
                 if output.exit_code == 0 {
-                    cleanup_temp_mysql_config(&config_path).await;
                     logger::info(app_handle, "MySQL 连接测试成功！");
                     return Ok(true);
                 } else {
@@ -371,7 +369,6 @@ async fn test_mysql_connection(
         }
     }
     
-    cleanup_temp_mysql_config(&config_path).await;
     logger::error(app_handle, &format!("已重试 {} 次，全部失败", max_retries));
     Ok(false)
 }
@@ -773,11 +770,11 @@ pub async fn change_mysql_password(
     };
 
     // 使用临时配置文件代替 -p 参数，避免密码泄露
-    let config_path = create_temp_mysql_config(&old_password).await?;
+    let config_guard = create_temp_mysql_config(&old_password).await?;
 
     // 构建基础参数
     let mut base_args: Vec<String> = vec![
-        format!("--defaults-file={}", config_path.display()),
+        format!("--defaults-file={}", config_guard.path().display()),
     ];
     if let Some(p) = port {
         base_args.push("-h127.0.0.1".to_string());
@@ -802,7 +799,6 @@ pub async fn change_mysql_password(
                                    output.stderr.contains("ERROR 1045");
             if is_access_denied {
                 logger::error(&app_handle, "❌ 旧密码不正确！请检查你输入的旧密码是否正确。");
-                cleanup_temp_mysql_config(&config_path).await;
                 return Err("旧密码不正确！请确认你输入的旧密码是否正确，或者使用密码重置功能。".to_string());
             }
         }
@@ -811,7 +807,6 @@ pub async fn change_mysql_password(
         }
         Err(e) => {
             logger::warn(&app_handle, &format!("验证过程异常: {}", e));
-            // 继续尝试，可能是网络或其他问题
         }
         _ => {}
     }
@@ -839,7 +834,6 @@ pub async fn change_mysql_password(
             logger::info(&app_handle, "正在测试连接...");
             
             let test_result = test_mysql_connection(&app_handle, &mysql_path, &new_password, port).await;
-            cleanup_temp_mysql_config(&config_path).await;
             
             match test_result {
                 Ok(true) => {
@@ -893,7 +887,6 @@ pub async fn change_mysql_password(
                         // 如果备用方案也失败，给出友好提示
                         logger::error(&app_handle, "所有修改密码的方案都失败了！");
                         logger::info(&app_handle, "💡 建议：如果旧密码忘记了，请使用密码重置功能！");
-                        cleanup_temp_mysql_config(&config_path).await;
                         Err("密码修改失败！请确认旧密码是否正确，或者尝试使用密码重置功能。".to_string())
                     }
                 }
@@ -934,7 +927,6 @@ pub async fn change_mysql_password(
                     _ => {
                         logger::error(&app_handle, "所有修改密码的方案都失败了！");
                         logger::info(&app_handle, "💡 建议：如果旧密码忘记了，请使用密码重置功能！");
-                        cleanup_temp_mysql_config(&config_path).await;
                         Err(format!("密码修改失败！错误信息: {}", output.stderr))
                     }
                 }
@@ -942,7 +934,6 @@ pub async fn change_mysql_password(
         }
         Err(e) => {
             logger::error(&app_handle, &format!("执行异常: {}", e));
-            cleanup_temp_mysql_config(&config_path).await;
             Err(format!("执行异常: {}", e))
         }
     }

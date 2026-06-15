@@ -3,13 +3,17 @@ compile_error!("Dev Tools 仅支持 Windows 平台");
 
 pub mod access;
 pub mod types;
+pub mod error;
 pub mod logger;
 pub mod process_manager;
+pub mod lifecycle;
+pub mod plugin;
 pub mod mysql;
 pub mod python;
 
 use types::*;
 use check_elevation::is_elevated;
+use plugin::PluginManager;
 
 #[tauri::command]
 fn is_running_as_admin() -> bool {
@@ -154,23 +158,23 @@ async fn download_python_only(app_handle: tauri::AppHandle, version: String, win
 }
 
 #[tauri::command]
-async fn download_and_install_python(
-    app_handle: tauri::AppHandle,
-    version: String,
-    install_path: Option<String>,
-    window: tauri::Window,
-) -> Result<(), String> {
-    access::require_admin()?;
-    python::version_fetcher::download_and_install_python(app_handle, version, install_path, window).await
+fn get_tool_list(state: tauri::State<'_, PluginManager>) -> Vec<plugin::ToolInfo> {
+    state.get_tool_list()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+  let mut plugin_mgr = PluginManager::new();
+  plugin_mgr.register(Box::new(mysql::MySqlPlugin));
+  plugin_mgr.register(Box::new(python::PythonPlugin));
+
   tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
+    .manage(plugin_mgr)
     .invoke_handler(tauri::generate_handler![
         is_running_as_admin,
         set_guest_mode,
+        get_tool_list,
         detect_mysql,
         uninstall_mysql,
         scan_mysql_residuals,
@@ -186,8 +190,7 @@ pub fn run() {
         list_pip_mirrors,
         switch_pip_mirror,
         get_available_python_versions,
-        download_python_only,
-        download_and_install_python
+        download_python_only
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

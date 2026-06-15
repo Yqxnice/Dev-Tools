@@ -140,15 +140,8 @@ pub struct DownloadProgress {
     pub total: u64,
     pub percentage: f64,
     pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InstallProgress {
-    pub version: String,
-    pub phase: String,
-    pub message: String,
-    pub percentage: u32,
     pub completed: bool,
     pub success: bool,
-    pub error: Option<String>,
 }
+
+
