@@ -1,28 +1,29 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { pythonService } from '../services/pythonService'
-import { appService } from '../services/appService'
 import { useToolDetection } from '../composables/useToolDetection'
-import { eventBus } from '../services/eventBus'
+import { useDownloadControl } from '../composables/useDownloadControl'
 import type {
   PythonVersion, PythonEnvironment, PythonPackage,
-  PipMirror, AvailablePythonVersion, DownloadProgress
+  PipMirror, AvailablePythonVersion
 } from '../types'
-
-type UnlistenFn = () => void
 
 export const usePythonStore = defineStore('python', () => {
   const cache = useToolDetection<PythonVersion[]>(pythonService, 'python_manager_cache')
+
+  // 下载控制（公共 composable）
+  const dl = useDownloadControl('python:')
+
+  // Python 独有状态
   const versions = ref<PythonVersion[]>([])
   const defaultPython = ref<PythonVersion | null>(null)
-  const envs = ref<(PythonEnvironment & { type: string })[]>([])
+  const selectedVersion = ref<PythonVersion | null>(null)
+  const envs = ref<PythonEnvironment[]>([])
   const packages = ref<PythonPackage[]>([])
   const mirrors = ref<PipMirror[]>([])
   const availableVersions = ref<AvailablePythonVersion[]>([])
-  const downloadProgress = ref<DownloadProgress | null>(null)
   const downloadingVersion = ref<string | null>(null)
-
-  let unlistenDownload: UnlistenFn | null = null
+  const mirrorPythonPath = ref<string | null>(null)
 
   function clearCache(): void {
     cache.clearCache()
@@ -32,7 +33,11 @@ export const usePythonStore = defineStore('python', () => {
   async function detectPython(): Promise<PythonVersion[]> {
     const result = await cache.detect()
     versions.value = result
-    eventBus.emit('python:detected', result)
+    // detect 后 versions 被替换为新引用，同步更新 selectedVersion 以保持选中态
+    if (selectedVersion.value) {
+      const matched = result.find(v => v.path === selectedVersion.value!.path)
+      selectedVersion.value = matched ?? null
+    }
     return result
   }
 
@@ -41,7 +46,6 @@ export const usePythonStore = defineStore('python', () => {
     try {
       const result = await pythonService.detectDefault()
       defaultPython.value = result
-      eventBus.emit('python:default-detected', result)
       return result
     } finally {
       cache.loading.value = false
@@ -51,10 +55,8 @@ export const usePythonStore = defineStore('python', () => {
   async function loadEnvs(): Promise<PythonEnvironment[]> {
     cache.loading.value = true
     try {
-      const result = await pythonService.listEnvironments()
-      envs.value = result.map(e => ({ ...e, type: e.env_type }))
-      eventBus.emit('python:envs-loaded', result)
-      return result
+      envs.value = await pythonService.listEnvironments()
+      return envs.value
     } finally {
       cache.loading.value = false
     }
@@ -65,7 +67,6 @@ export const usePythonStore = defineStore('python', () => {
     try {
       const result = await pythonService.listPackages(pythonPath)
       packages.value = result
-      eventBus.emit('python:packages-loaded', result)
       return result
     } finally {
       cache.loading.value = false
@@ -75,7 +76,7 @@ export const usePythonStore = defineStore('python', () => {
   async function loadMirrors(): Promise<PipMirror[]> {
     cache.loading.value = true
     try {
-      const result = await pythonService.listMirrors()
+      const result = await pythonService.listMirrors(mirrorPythonPath.value)
       mirrors.value = result
       return result
     } finally {
@@ -83,12 +84,11 @@ export const usePythonStore = defineStore('python', () => {
     }
   }
 
-  async function switchMirror(mirror: PipMirror): Promise<void> {
+  async function switchMirror(mirror: { name: string; url: string }): Promise<void> {
     cache.loading.value = true
     try {
-      await pythonService.switchMirror(mirror.name, mirror.url)
+      await pythonService.switchMirror(mirror.name, mirror.url, mirrorPythonPath.value)
       await loadMirrors()
-      eventBus.emit('python:mirror-switched', mirror)
     } finally {
       cache.loading.value = false
     }
@@ -106,54 +106,34 @@ export const usePythonStore = defineStore('python', () => {
   }
 
   async function downloadPythonVersion(version: string): Promise<string> {
+    dl.currentTaskId.value = `python:${version}`
     downloadingVersion.value = version
+    dl.downloadProgress.value = null
     try {
-      const path = await pythonService.downloadVersion(version)
-      eventBus.emit('python:downloaded', { version, path })
-      return path
+      return await pythonService.downloadVersion(version)
     } finally {
       downloadingVersion.value = null
+      dl.currentTaskId.value = null
     }
   }
 
-  function getSystemArchitecture(): string {
-    const ua = navigator.userAgent
-    if (ua.includes('ARM64') || ua.includes('aarch64')) return 'arm64'
-    if (navigator.platform.includes('Win64') || ua.includes('x64') || ua.includes('WOW64')) return 'amd64'
-    return 'amd64'
-  }
-
-  function formatFileSize(bytes: number | null | undefined): string {
-    if (!bytes) return '0 B'
-    const sizes = ['B', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(1024))
-    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i]
-  }
-
-  async function setupDownloadListener(): Promise<void> {
-    try {
-      unlistenDownload = await appService.setupDownloadListener((event) => {
-        downloadProgress.value = event.payload as DownloadProgress
-        if (event.payload && (event.payload as DownloadProgress).completed) {
-          downloadingVersion.value = null
-        }
-      })
-    } catch { /* not in Tauri */ }
-  }
-
-  function cleanupDownloadListener(): void {
-    if (unlistenDownload) unlistenDownload()
-  }
-
   return {
-    versions, cachedInfo: cache.cachedInfo, defaultPython,
+    // 独有状态
+    versions, cachedInfo: cache.cachedInfo, defaultPython, selectedVersion,
     envs, packages, mirrors,
-    availableVersions, downloadProgress, downloadingVersion,
+    availableVersions, downloadingVersion, mirrorPythonPath,
     loading: cache.loading,
+    // 下载能力（来自 composable，重命名为业务语义）
+    downloadProgress: dl.downloadProgress,
+    currentTaskId: dl.currentTaskId,
+    dismissDownloadProgress: dl.dismissDownloadProgress,
+    formatFileSize: dl.formatFileSize,
+    pauseDownload: dl.pauseDownload,
+    resumeDownload: dl.resumeDownload,
+    cancelDownload: dl.cancelDownload,
+    // 独有方法
     clearCache, detectPython, detectDefaultPython,
     loadEnvs, loadPackages, loadMirrors, switchMirror,
     loadAvailableVersions, downloadPythonVersion,
-    getSystemArchitecture, formatFileSize,
-    setupDownloadListener, cleanupDownloadListener
   }
 })

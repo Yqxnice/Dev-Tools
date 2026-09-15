@@ -1,45 +1,43 @@
+/* ============================================================================
+ * 全局样式
+ *
+ * 颜色变量（--color-* / --bg-* / --text-* / --border-* / --shadow-* / --scrollbar-*）
+ * 不再在本文件定义，统一由 src/theme/tokens.ts 的 applyCssTokens() 在运行时注入，
+ * 作为整个应用颜色的单一事实源。
+ *
+ * 本文件只保留：
+ *   1. 非颜色设计 token（spacing / radius / duration / ease / font-mono）
+ *   2. CSS reset 与全局结构样式
+ *   3. 滚动条、焦点、按钮反馈等通用交互样式
+ *   4. 首屏 fallback 底色（JS 注入前的极短瞬间，避免白屏）
+ * ========================================================================== */
+
 :root {
-  --color-primary: #3b82f6;
-  --color-primary-hover: #2563eb;
-  --color-primary-light: rgba(59, 130, 246, 0.15);
-  --color-success: #22c55e;
-  --color-success-light: rgba(34, 197, 94, 0.15);
-  --color-warning: #f59e0b;
-  --color-warning-light: rgba(245, 158, 11, 0.15);
-  --color-danger: #ef4444;
-  --color-danger-light: rgba(239, 68, 68, 0.15);
-
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #0f0f17;
-  --bg-tertiary: #14141f;
-  --bg-card: rgba(255, 255, 255, 0.02);
-  --bg-card-hover: rgba(255, 255, 255, 0.04);
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --border-primary: rgba(255, 255, 255, 0.06);
-  --border-hover: rgba(255, 255, 255, 0.1);
-
+  /* ===== 间距 ===== */
   --spacing-xs: 4px; --spacing-sm: 8px; --spacing-md: 12px;
   --spacing-lg: 16px; --spacing-xl: 24px; --spacing-2xl: 32px;
-  --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px; --radius-xl: 16px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
-  --transition-fast: 150ms ease; --transition-normal: 200ms ease;
-}
 
-:root[data-theme="light"] {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f8fafc;
-  --bg-tertiary: #f1f5f9;
-  --bg-card: rgba(0, 0, 0, 0.02);
-  --bg-card-hover: rgba(0, 0, 0, 0.04);
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #94a3b8;
-  --border-primary: rgba(0, 0, 0, 0.08);
-  --border-hover: rgba(0, 0, 0, 0.12);
+  /* ===== 圆角 ===== */
+  --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px; --radius-xl: 16px;
+
+  /* ===== 时长分级:微交互 / 标准 / 过渡 / 装饰 ===== */
+  --duration-instant: 100ms;
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+
+  /* ===== 物理缓动曲线 ===== */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
+  --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* 向后兼容:旧名映射到新分级 */
+  --transition-fast: var(--duration-fast) var(--ease-standard);
+  --transition-normal: var(--duration-normal) var(--ease-standard);
+
+  /* 等宽字体栈:路径/版本号/日志统一 */
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, 'SF Mono', 'Microsoft YaHei UI', monospace;
 }
 
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -48,23 +46,44 @@ html, body, #app {
   height: 100vh; width: 100vw; overflow: hidden;
 }
 
+/* 首屏 fallback：JS 注入颜色变量前的极短瞬间使用深色，避免白屏闪烁。
+   窗口在 App.vue onMounted 后才 showWindow()，实际几乎不可见。 */
+html, body {
+  background: #0a0a0f;
+  color: #f1f5f9;
+}
+
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* 主题切换平滑过渡,避免深浅模式切换闪烁 */
+  transition: background-color var(--duration-slow) var(--ease-standard),
+              color var(--duration-slow) var(--ease-standard);
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
-* { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.1) transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
 
-@media (max-width: 768px) {
-  .sidebar { position: fixed; left: -256px; z-index: 100; transition: left var(--transition-normal); }
-  .sidebar.open { left: 0; }
-  .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 99; }
-  .sidebar.open + .sidebar-overlay { display: block; }
+/* 文本选区：跟随主色 */
+::selection {
+  background: var(--color-primary-light);
+  color: var(--text-primary);
+}
+
+/* 键盘焦点可见性 */
+button:focus-visible, .n-button:focus-visible, [role="button"]:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* 全局按钮按下反馈:scale + 弹性曲线,增强桌面感 */
+.n-button:not(:disabled):active {
+  transform: scale(0.97);
+  transition: transform var(--duration-instant) var(--ease-spring);
 }

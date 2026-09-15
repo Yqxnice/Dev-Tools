@@ -1,5 +1,6 @@
 use super::super::{logger, process_manager};
 use super::super::types::PipMirror;
+use super::package_manager::validate_python_path;
 use tauri::AppHandle;
 
 pub fn validate_mirror_url(url: &str) -> Result<(), String> {
@@ -24,38 +25,59 @@ pub fn get_default_mirrors() -> Vec<PipMirror> {
             active: false,
         },
         PipMirror {
-            name: "豆瓣".to_string(),
-            url: "https://pypi.douban.com/simple/".to_string(),
+            name: "中国科技大学".to_string(),
+            url: "https://pypi.mirrors.ustc.edu.cn/simple/".to_string(),
             active: false,
         },
         PipMirror {
-            name: "中科大".to_string(),
-            url: "https://pypi.mirrors.ustc.edu.cn/simple/".to_string(),
+            name: "豆瓣".to_string(),
+            url: "https://pypi.douban.com/simple/".to_string(),
             active: false,
         },
     ]
 }
 
-pub async fn list_pip_mirrors(_app_handle: AppHandle) -> Vec<PipMirror> {
-    let mut mirrors = get_default_mirrors();
-
-    if let Some(active_url) = get_current_mirror().await {
-        for mirror in &mut mirrors {
-            mirror.active = mirror.url == active_url;
-        }
-    }
-
-    mirrors
+/// 解析 pip 命令对应的 Python 解释器：优先使用用户选中的 python.exe，否则回退 PATH 中的 python
+fn resolve_python_cmd(python_path: Option<String>) -> Result<String, String> {
+    let cmd = python_path.unwrap_or_else(|| "python".to_string());
+    validate_python_path(&cmd).map_err(|e| format!("Python 路径验证失败: {}", e))?;
+    Ok(cmd)
 }
 
-async fn get_current_mirror() -> Option<String> {
+pub async fn list_pip_mirrors(app_handle: AppHandle, python_path: Option<String>) -> Result<Vec<PipMirror>, String> {
+    let mut mirrors = get_default_mirrors();
+
+    match resolve_python_cmd(python_path) {
+        Ok(python_cmd) => {
+            if let Some(active_url) = get_current_mirror(&python_cmd).await {
+                for mirror in &mut mirrors {
+                    mirror.active = mirror.url == active_url;
+                }
+            } else {
+                logger::warn(&app_handle, "未能读取当前 pip 镜像配置（可能未配置过或该解释器无 pip）");
+            }
+        }
+        Err(e) => logger::warn(&app_handle, &e),
+    }
+
+    Ok(mirrors)
+}
+
+async fn get_current_mirror(python_cmd: &str) -> Option<String> {
     let result = process_manager::execute_command(
-        "pip",
-        &["config", "get", "global.index-url"],
+        python_cmd,
+        &["-m", "pip", "config", "get", "global.index-url"],
     )
     .await;
     match result {
-        Ok(output) if output.exit_code == 0 => Some(output.stdout.trim().to_string()),
+        Ok(output) if output.exit_code == 0 => {
+            let stdout = output.stdout.trim();
+            if stdout.is_empty() {
+                None
+            } else {
+                Some(stdout.to_string())
+            }
+        }
         _ => None,
     }
 }
@@ -64,13 +86,17 @@ pub async fn switch_pip_mirror(
     app_handle: AppHandle,
     mirror_name: String,
     mirror_url: String,
+    python_path: Option<String>,
 ) -> Result<String, String> {
-    if let Err(e) = validate_mirror_url(&mirror_url) {
-        return Err(e);
-    }
+    validate_mirror_url(&mirror_url)?;
+    let python_cmd = resolve_python_cmd(python_path)?;
+    logger::info(
+        &app_handle,
+        &format!("通过解释器 {} 切换 pip 镜像到 {}", python_cmd, mirror_name),
+    );
     let result = process_manager::execute_command(
-        "pip",
-        &["config", "set", "global.index-url", &mirror_url],
+        &python_cmd,
+        &["-m", "pip", "config", "set", "global.index-url", &mirror_url],
     )
     .await;
 

@@ -27,7 +27,7 @@ export default defineConfig(async () => ({
     rollupOptions: {
       output: {
         manualChunks: {
-          'vue-vendor': ['vue', 'pinia', 'pinia-plugin-persistedstate'],
+          'vue-vendor': ['vue', 'pinia', 'vue-router'],
           'naive-ui': ['naive-ui'],
           'tauri': ['@tauri-apps/api', '@tauri-apps/plugin-shell']
         }

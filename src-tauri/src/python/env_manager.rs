@@ -14,7 +14,7 @@ async fn get_python_version_from_path(python_path: &str) -> String {
 
 async fn scan_virtual_environments(app_handle: &AppHandle) -> Vec<PythonEnvironment> {
     let mut envs = Vec::new();
-    
+
     let common_locations = vec![
         dirs::home_dir().map(|p| p.join(".venvs")),
         dirs::home_dir().map(|p| p.join(".virtualenvs")),
@@ -24,15 +24,21 @@ async fn scan_virtual_environments(app_handle: &AppHandle) -> Vec<PythonEnvironm
 
     for location in common_locations.into_iter().flatten() {
         if location.exists() && location.is_dir() {
-            if let Ok(mut entries) = tokio::fs::read_dir(&location).await {
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    let entry_path = entry.path();
-                    if entry_path.is_dir() {
-                        if let Some(env) = check_virtual_env(&entry_path, app_handle).await {
-                            envs.push(env);
+            match tokio::fs::read_dir(&location).await {
+                Ok(mut entries) => {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let entry_path = entry.path();
+                        if entry_path.is_dir() {
+                            if let Some(env) = check_virtual_env(&entry_path, app_handle).await {
+                                envs.push(env);
+                            }
                         }
                     }
                 }
+                Err(e) => logger::warn(
+                    app_handle,
+                    &format!("扫描虚拟环境目录 {} 失败，跳过: {}", location.display(), e),
+                ),
             }
         }
     }
@@ -62,10 +68,16 @@ async fn check_virtual_env(env_path: &Path, _app_handle: &AppHandle) -> Option<P
     }
 }
 
-pub async fn list_python_environments(app_handle: AppHandle) -> Vec<PythonEnvironment> {
+pub async fn list_python_environments(app_handle: AppHandle) -> Result<Vec<PythonEnvironment>, String> {
     let mut envs = Vec::new();
 
-    let system_pythons = detector::detect_python_versions(app_handle.clone()).await;
+    let system_pythons = match detector::detect_python_versions(app_handle.clone()).await {
+        Ok(v) => v,
+        Err(e) => {
+            logger::warn(&app_handle, &format!("检测系统 Python 失败，跳过: {}", e));
+            Vec::new()
+        }
+    };
     for py in system_pythons {
         envs.push(PythonEnvironment {
             name: format!("系统 Python {}", py.version),
@@ -79,5 +91,5 @@ pub async fn list_python_environments(app_handle: AppHandle) -> Vec<PythonEnviro
     envs.extend(virtual_envs);
 
     logger::info(&app_handle, &format!("扫描完成，共发现 {} 个 Python 环境", envs.len()));
-    envs
+    Ok(envs)
 }

@@ -8,6 +8,24 @@
     "core:event:allow-emit",
     "core:event:allow-unlisten",
     "shell:allow-open",
-    "core:window:allow-close"
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "explorer",
+          "cmd": "explorer.exe",
+          "args": [{ "validator": "^[^&|<>]+$" }]
+        }
+      ]
+    },
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-minimize",
+    "core:window:allow-show",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "notification:default"
   ]
 }

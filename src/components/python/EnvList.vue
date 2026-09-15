@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { NButton, NTag, NCard, NEmpty } from 'naive-ui'
+import { NButton, NTag, NCard } from 'naive-ui'
 import { usePythonStore } from '../../stores/pythonStore'
 import { useLoggerStore } from '../../stores/loggerStore'
-import '../../assets/feature-common.css'
+import FlatTablePanel from '../shared/FlatTablePanel.vue'
 
 const py = usePythonStore()
 const log = useLoggerStore()
@@ -17,31 +17,35 @@ async function handleRefresh() {
 </script>
 
 <template>
-  <div class="feature-panel">
-    <div class="feature-header">
-      <div>
-        <h3>Python 环境列表</h3>
-        <p>查看系统中的 Python 虚拟环境和系统环境</p>
-      </div>
-      <n-button type="primary" :loading="py.loading" @click="handleRefresh">{{ py.loading ? '刷新中...' : '刷新列表' }}</n-button>
-    </div>
+  <FlatTablePanel
+    title="Python 环境列表"
+    description="查看系统中的 Python 虚拟环境和系统环境"
+    :items="py.envs"
+    :loading="py.loading"
+    empty-text="未检测到 Python 环境"
+    @refresh="handleRefresh"
+  >
+    <template #actions>
+      <n-button type="primary" :loading="py.loading" @click="handleRefresh">
+        {{ py.loading ? '刷新中...' : '刷新列表' }}
+      </n-button>
+    </template>
 
-    <div v-if="py.envs.length > 0">
-      <div class="section-label"><span>环境列表</span><n-tag type="info" size="small">{{ py.envs.length }} 个环境</n-tag></div>
-      <div class="instance-list">
-        <n-card v-for="(env, index) in py.envs" :key="index" :title="env.name" :bordered="true" size="small">
-          <template #header-extra><n-tag type="success" size="small">{{ env.type }}</n-tag></template>
-          <div class="detail-grid">
-            <div class="detail-item detail-item-full"><span class="detail-label">路径</span><span class="detail-value detail-path">{{ env.path }}</span></div>
-            <div v-if="env.pythonVersion" class="detail-item"><span class="detail-label">Python 版本</span><span class="detail-value">{{ env.pythonVersion }}</span></div>
-          </div>
-        </n-card>
+    <template #toolbar>
+      <div v-if="py.envs.length > 0" class="section-label">
+        <span>环境列表</span>
+        <n-tag type="info" size="small">{{ py.envs.length }} 个环境</n-tag>
       </div>
-    </div>
-    <n-empty v-else description="未检测到 Python 环境" />
-  </div>
+    </template>
+
+    <template #row="{ item: env }">
+      <n-card :title="env.name" :bordered="true" size="small">
+        <template #header-extra><n-tag type="success" size="small">{{ env.env_type }}</n-tag></template>
+        <div class="detail-grid">
+          <div class="detail-item detail-item-full"><span class="detail-label">路径</span><span class="detail-value detail-path">{{ env.path }}</span></div>
+          <div v-if="env.python_version" class="detail-item"><span class="detail-label">Python 版本</span><span class="detail-value">{{ env.python_version }}</span></div>
+        </div>
+      </n-card>
+    </template>
+  </FlatTablePanel>
 </template>
-
-<style scoped>
-</style>
-

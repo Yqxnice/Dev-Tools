@@ -1,5 +1,5 @@
-.feature-panel { padding: 16px 24px; max-width: 600px; width: 100%; margin: 0 auto; flex: 1; overflow-y: auto; }
-.feature-panel-wide { max-width: 640px; }
+.feature-panel { padding: 16px 24px; max-width: 960px; width: 100%; margin: 0 auto; flex: 1 1 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.feature-panel-wide { max-width: 1000px; }
 .feature-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
 .feature-header h3 { font-size: 18px; font-weight: 600; margin: 0 0 4px 0; }
 .feature-header p { font-size: 13px; color: var(--text-secondary); margin: 0; }
@@ -7,6 +7,40 @@
 
 .section-label { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
 .instance-list { display: flex; flex-direction: column; gap: 10px; }
+.flat-list { display: flex; flex-direction: column; gap: 10px; }
+.flat-row { }
+
+/* 下载列表行：卡片式行，左侧产品名+版本号+标签，中部包类型（MySQL），右侧操作 */
+.version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.version-row:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-hover);
+}
+.version-row-info { display: flex; align-items: baseline; gap: 8px; flex-shrink: 0; }
+.version-row-name { font-size: 13px; font-weight: 600; }
+/* 版本号：等宽字体突出显示 */
+.version-row-ver {
+  font-size: 13px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  color: var(--color-primary);
+  letter-spacing: -0.2px;
+}
+/* 行内次要元信息（发布日期/包大小等） */
+.version-row-sub { font-size: 11px; color: var(--text-muted); }
+.version-row-info .n-tag { align-self: center; }
+.version-row-pkg { flex: 1; min-width: 0; }
+
 .detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .detail-item { display: flex; flex-direction: column; gap: 2px; }
 .detail-item-full { grid-column: span 2; }
@@ -22,4 +56,17 @@
 .instance-pick-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
 .instance-pick-check { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; background: var(--color-primary); color: white; border-radius: 50%; font-size: 14px; font-weight: bold; flex-shrink: 0; }
 
+/* 宽屏两栏布局：左列放选择/信息，右列放操作表单；窗口不够宽时自动退化为单列 */
+@media (min-width: 1280px) {
+  .panel-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  .panel-columns > * { min-width: 0; }
+}
+
 .mb-3 { margin-bottom: 12px; }
+
+/* 空状态/占位提示（未检测到XX、点击查看列表等）：
+   feature-panel 为 flex 纵向容器，width:100% + auto 上下边距使其在剩余空间水平垂直双向居中 */
+.n-empty { width: 100%; margin: auto 0; }
+
+/* 表单输入框收窄：密码/端口等输入框无需占满整行 */
+.form-group .n-input { max-width: 320px; }

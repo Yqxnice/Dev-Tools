@@ -1,4 +1,4 @@
-use super::super::{logger, process_manager};
+use super::super::{detector_base, logger, process_manager};
 use super::super::types::PythonVersion;
 use regex::Regex;
 use once_cell::sync::Lazy;
@@ -6,6 +6,18 @@ use std::path::Path;
 use tauri::AppHandle;
 use std::env;
 use futures_util::future::join_all;
+
+/// Python 版本统一来源标签：当前实现未识别 Chocolatey/Scoop/Anaconda/pyenv-win
+const PYTHON_MANAGER: &str = "system";
+
+impl detector_base::RuntimeInstance for PythonVersion {
+    fn get_executable(&self) -> &str { &self.executable }
+    fn get_version(&self) -> &str { &self.version }
+    fn get_path(&self) -> &str { &self.path }
+    fn get_manager(&self) -> &str { &self.manager }
+    fn get_status(&self) -> &str { &self.status }
+    fn set_status(&mut self, s: String) { self.status = s; }
+}
 
 static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"Python (\d+\.\d+\.\d+)").unwrap());
 
@@ -69,17 +81,14 @@ pub(crate) async fn check_python_at_path(path: &str) -> Option<PythonVersion> {
     let result = process_manager::execute_command(path, &["--version"]).await;
     match result {
         Ok(output) if output.exit_code == 0 => {
-            let version_str = output.stdout.trim().to_string() + " " + &output.stderr.trim();
-            if let Some(version) = parse_version(&version_str) {
-                Some(PythonVersion {
-                    version,
-                    path: real_parent,
-                    executable: real_executable,
-                    status: "已安装".to_string(),
-                })
-            } else {
-                None
-            }
+            let version_str = output.stdout.trim().to_string() + " " + output.stderr.trim();
+            parse_version(&version_str).map(|version| PythonVersion {
+                version,
+                path: real_parent,
+                executable: real_executable,
+                manager: PYTHON_MANAGER.to_string(),
+                status: "已安装".to_string(),
+            })
         }
         _ => None,
     }
@@ -147,61 +156,58 @@ async fn try_detect_from_path(_app_handle: &AppHandle) -> Vec<PythonVersion> {
     versions
 }
 
-async fn try_detect_from_appdata(_app_handle: &AppHandle) -> Vec<PythonVersion> {
+async fn try_detect_from_appdata(app_handle: &AppHandle) -> Vec<PythonVersion> {
     let mut versions = Vec::new();
-    
+
     // 检查用户目录下的 Python
     if let Some(user_dir) = dirs::home_dir() {
         let appdata_local = user_dir.join("AppData").join("Local").join("Programs").join("Python");
-        
+
         if appdata_local.exists() && appdata_local.is_dir() {
-            if let Ok(mut entries) = tokio::fs::read_dir(appdata_local).await {
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    let entry_path = entry.path();
-                    if entry_path.is_dir() {
-                        let python_exe = entry_path.join("python.exe");
-                        if python_exe.exists() {
-                            if let Some(path_str) = python_exe.to_str() {
-                                if let Some(py_ver) = check_python_at_path(path_str).await {
-                                    versions.push(py_ver);
+            match tokio::fs::read_dir(appdata_local).await {
+                Ok(mut entries) => {
+                    while let Ok(Some(entry)) = entries.next_entry().await {
+                        let entry_path = entry.path();
+                        if entry_path.is_dir() {
+                            let python_exe = entry_path.join("python.exe");
+                            if python_exe.exists() {
+                                if let Some(path_str) = python_exe.to_str() {
+                                    if let Some(py_ver) = check_python_at_path(path_str).await {
+                                        versions.push(py_ver);
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                Err(e) => logger::warn(
+                    app_handle,
+                    &format!("扫描 AppData Python 目录失败，跳过: {}", e),
+                ),
             }
         }
     }
-    
+
     versions
 }
 
-pub async fn detect_default_python(_app_handle: AppHandle) -> Option<PythonVersion> {
+pub async fn detect_default_python(_app_handle: AppHandle) -> Result<Option<PythonVersion>, String> {
     // 1. 先尝试 python
     if let Some(py_ver) = check_python_at_path("python").await {
-        return Some(py_ver);
+        return Ok(Some(py_ver));
     }
-    
+
     // 2. 再尝试 python3
     if let Some(py_ver) = check_python_at_path("python3").await {
-        return Some(py_ver);
+        return Ok(Some(py_ver));
     }
-    
-    None
+
+    Ok(None)
 }
 
-pub async fn detect_python_versions(app_handle: AppHandle) -> Vec<PythonVersion> {
+pub async fn detect_python_versions(app_handle: AppHandle) -> Result<Vec<PythonVersion>, String> {
     logger::info(&app_handle, "开始检测 Python...");
     let mut versions = Vec::new();
-    let mut processed_executables = std::collections::HashSet::new();
-
-    // 用于添加版本的辅助函数
-    let mut add_version = |py_ver: PythonVersion| {
-        if !processed_executables.contains(&py_ver.executable) {
-            processed_executables.insert(py_ver.executable.clone());
-            versions.push(py_ver);
-        }
-    };
 
     // 1. 先尝试检测环境变量中的 python 和 python3
     let common_paths = vec![
@@ -211,27 +217,21 @@ pub async fn detect_python_versions(app_handle: AppHandle) -> Vec<PythonVersion>
 
     for path in common_paths {
         if let Some(py_ver) = check_python_at_path(path).await {
-            add_version(py_ver);
+            versions.push(py_ver);
         }
     }
 
     // 2. 使用 py launcher 检测
     let py_versions = try_detect_with_py(&app_handle).await;
-    for py_ver in py_versions {
-        add_version(py_ver);
-    }
+    versions.extend(py_versions);
 
     // 3. 从 PATH 环境变量检测
     let path_versions = try_detect_from_path(&app_handle).await;
-    for py_ver in path_versions {
-        add_version(py_ver);
-    }
+    versions.extend(path_versions);
 
     // 4. 从用户目录检测
     let appdata_versions = try_detect_from_appdata(&app_handle).await;
-    for py_ver in appdata_versions {
-        add_version(py_ver);
-    }
+    versions.extend(appdata_versions);
 
     // 5. 检测常见安装位置（备选）
     let system_paths = vec![
@@ -254,11 +254,13 @@ pub async fn detect_python_versions(app_handle: AppHandle) -> Vec<PythonVersion>
 
     for path in system_paths {
         if let Some(py_ver) = check_python_at_path(path).await {
-            add_version(py_ver);
+            versions.push(py_ver);
         }
     }
 
+    let versions = detector_base::dedupe_by_executable(versions);
+
     logger::info(&app_handle, &format!("检测完成，发现 {} 个 Python 版本", versions.len()));
 
-    versions
+    Ok(versions)
 }

@@ -4,6 +4,7 @@ pub mod package_manager;
 pub mod mirror_manager;
 pub mod version_fetcher;
 pub mod plugin;
+pub mod commands;
 
 pub use detector::*;
 pub use env_manager::*;

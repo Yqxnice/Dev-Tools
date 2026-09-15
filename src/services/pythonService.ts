@@ -3,7 +3,7 @@ import type { PythonVersion, PythonEnvironment, PythonPackage, PipMirror, Availa
 
 export const pythonService = {
   detect: () =>
-    ipc<PythonVersion[]>('detect_python_versions'),
+    ipc<PythonVersion[]>('detect_python'),
 
   detectDefault: () =>
     ipc<PythonVersion | null>('detect_default_python'),
@@ -14,15 +14,18 @@ export const pythonService = {
   listPackages: (pythonPath: string | null) =>
     ipc<PythonPackage[]>('list_python_packages', { pythonPath: pythonPath || null }),
 
-  listMirrors: () =>
-    ipc<PipMirror[]>('list_pip_mirrors'),
+  listMirrors: (pythonPath: string | null) =>
+    ipc<PipMirror[]>('list_python_mirrors', { pythonPath }),
 
-  switchMirror: (mirrorName: string, mirrorUrl: string) =>
-    ipc<string>('switch_pip_mirror', { mirrorName, mirrorUrl }),
+  switchMirror: (mirrorName: string, mirrorUrl: string, pythonPath: string | null) =>
+    ipc<string>('switch_python_mirror', { mirrorName, mirrorUrl, pythonPath }),
 
   getAvailableVersions: () =>
     ipc<AvailablePythonVersion[]>('get_available_python_versions'),
 
   downloadVersion: (version: string) =>
-    ipc<string>('download_python_only', { version }),
+    ipc<string>('download_python', { version }),
+
+  getDownloadUrl: (version: string) =>
+    ipc<string>('get_python_download_url', { version }),
 }

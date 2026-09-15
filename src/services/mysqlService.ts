@@ -1,12 +1,18 @@
 import { ipc } from './ipc'
-import type { MySQLInfo, CleanResult, CleanScanResult, CleanOptions, MySQLInstance } from '../types'
+import type { MySQLInfo, CleanResult, CleanScanResult, CleanOptions, MySQLInstance, MySQLVersionInfo } from '../types'
 
 export const mysqlService = {
   detect: () =>
     ipc<MySQLInfo>('detect_mysql'),
 
-  uninstall: (services: string[] | null) =>
-    ipc<void>('uninstall_mysql', { services }),
+  getAvailableVersions: () =>
+    ipc<MySQLVersionInfo[]>('get_available_mysql_versions'),
+
+  downloadVersion: (version: string, packageType: string) =>
+    ipc<string>('download_mysql', { version, packageType }),
+
+  uninstall: (services: string[] | null, instances: MySQLInstance[] | null) =>
+    ipc<void>('uninstall_mysql', { services, instances }),
 
   scanResidue: (selectedInstance: MySQLInstance) =>
     ipc<CleanScanResult>('scan_mysql_residuals', { selectedInstance }),

@@ -387,7 +387,7 @@ pub async fn scan_mysql_residuals(
 
     let mut services: Vec<String> = Vec::new();
     if let Some(svc_name) = &targets.service_name {
-        let status = crate::mysql::detector::check_service_status(svc_name).await;
+        let status = crate::service_manager::check_service_status(svc_name).await;
         if status != "未安装" {
             services.push(svc_name.clone());
         }
@@ -423,16 +423,46 @@ pub async fn scan_mysql_residuals(
     }
 }
 
+/// 由实例安装根目录推导 bin 目录（mysqld/mysql 可执行文件所在目录）
+fn instance_bin_dir(targets: &InstanceTargets) -> Option<String> {
+    let root = targets.install_dir.as_deref()?;
+    let bin_sub = Path::new(root).join("bin");
+    if bin_sub.is_dir() {
+        Some(bin_sub.to_string_lossy().to_string())
+    } else {
+        Some(root.to_string())
+    }
+}
+
+/// 轮询等待该实例目录下的进程完全退出（最多 15 秒）
+async fn wait_instance_processes_gone(app_handle: &AppHandle, bin_dir: &str) {
+    for _ in 0..15 {
+        let remaining = process_manager::count_mysql_processes_in_dir(bin_dir)
+            .await
+            .unwrap_or(0);
+        if remaining == 0 {
+            logger::info(app_handle, "实例进程已全部退出");
+            return;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+    logger::warn(app_handle, "部分实例进程未能在超时时间内退出");
+}
+
 async fn kill_instance_processes(
     app_handle: &AppHandle,
     result: &mut CleanResult,
     targets: &InstanceTargets,
 ) {
-    // 1. 终止所有 mysqld 相关进程（通过进程名）
-    logger::info(app_handle, "正在终止所有 MySQL 相关进程...");
-    let _ = process_manager::execute_command("taskkill", &["/F", "/IM", "mysqld.exe", "/T"]).await;
-    
-    // 2. 终止特定服务的进程
+    let bin_dir = match instance_bin_dir(targets) {
+        Some(dir) => dir,
+        None => {
+            logger::warn(app_handle, "无法解析实例安装目录，跳过进程终止（避免误杀其他实例）");
+            return;
+        }
+    };
+
+    // 1. 终止该实例服务对应的进程（按服务 PID 精准终止）
     if let Some(svc) = &targets.service_name {
         logger::info(app_handle, &format!("终止实例服务进程: {}", svc));
         if let Ok(output) = process_manager::execute_command("sc", &["queryex", svc]).await {
@@ -466,40 +496,18 @@ async fn kill_instance_processes(
         }
     }
 
-    // 3. 终止特定可执行文件的进程
-    if let Some(bin_dir) = &targets.install_dir {
-        let mysqld = Path::new(bin_dir).join("bin").join("mysqld.exe");
-        let mysqld_alt = Path::new(bin_dir).join("mysqld.exe");
-        let exe = if mysqld.exists() {
-            Some(mysqld)
-        } else if mysqld_alt.exists() {
-            Some(mysqld_alt)
-        } else {
-            None
-        };
-        if let Some(path) = exe {
-            let path_str = path.to_string_lossy();
-            logger::info(app_handle, &format!("尝试终止实例可执行文件进程: {}", path_str));
-            let _ = process_manager::execute_command(
-                "wmic",
-                &[
-                    "process",
-                    "where",
-                    &format!(r#"ExecutablePath='{}'"#, path_str.replace('\\', "\\\\").replace('\'', "\\'")),
-                    "call",
-                    "terminate",
-                ],
-            )
-            .await;
+    // 2. 按可执行文件路径精准终止该实例目录下的 mysqld.exe / mysql.exe（不影响其他实例）
+    logger::info(app_handle, &format!("终止实例目录下的 MySQL 进程: {}", bin_dir));
+    match process_manager::kill_mysql_processes_in_dir(&bin_dir).await {
+        Ok(n) if n > 0 => {
+            logger::info(app_handle, &format!("已终止 {} 个实例进程", n));
         }
+        Ok(_) => {}
+        Err(e) => result.errors.push(format!("终止实例进程异常: {}", e)),
     }
-    
-    // 4. 终止 mysql.exe 客户端进程
-    let _ = process_manager::execute_command("taskkill", &["/F", "/IM", "mysql.exe", "/T"]).await;
-    
-    // 等待进程完全终止
-    logger::info(app_handle, "等待进程完全终止...");
-    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+
+    // 3. 轮询等待进程完全退出
+    wait_instance_processes_gone(app_handle, &bin_dir).await;
 }
 
 async fn remove_residual_services(
@@ -587,12 +595,12 @@ async fn delete_registry_key(_app_handle: &AppHandle, key: &str) -> Result<(), S
     
     let ps_output = run_powershell_with_env(script, &env_vars).await;
     if ps_output.trim() == "SUCCESS" {
-        return Ok(());
+        Ok(())
     } else {
-        return Err(format!(
+        Err(format!(
             "PowerShell 删除失败: {}",
             if ps_output.trim().is_empty() { "无输出" } else { ps_output.trim() }
-        ));
+        ))
     }
 }
 
@@ -795,12 +803,17 @@ pub async fn clean_mysql_residuals(
         remove_residual_services(&app_handle, &mut result, services).await;
     }
 
-    // 3. 再次终止可能的遗留进程，等待更长时间
-    logger::info(&app_handle, "再次检查并终止遗留进程...");
+    // 3. 再次检查并终止该实例可能的遗留进程（按目录精准匹配，轮询等待退出）
     if options.kill_processes {
-        let _ = process_manager::execute_command("taskkill", &["/F", "/IM", "mysqld.exe", "/T"]).await;
-        let _ = process_manager::execute_command("taskkill", &["/F", "/IM", "mysql.exe", "/T"]).await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
+        if let Some(bin_dir) = instance_bin_dir(&targets) {
+            logger::info(&app_handle, "再次检查并终止实例遗留进程...");
+            if let Ok(n) = process_manager::kill_mysql_processes_in_dir(&bin_dir).await {
+                if n > 0 {
+                    logger::info(&app_handle, &format!("补杀 {} 个遗留进程", n));
+                }
+            }
+            wait_instance_processes_gone(&app_handle, &bin_dir).await;
+        }
     }
 
     // 4. 清理注册表（可以在删除文件之前清理）

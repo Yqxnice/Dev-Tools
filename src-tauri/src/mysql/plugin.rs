@@ -1,33 +1,55 @@
+use super::commands;
 use crate::plugin::{ToolFeature, ToolPlugin};
-use async_trait::async_trait;
+use tauri::{ipc::Invoke, Wry};
 
 pub struct MySqlPlugin;
 
-#[async_trait]
 impl ToolPlugin for MySqlPlugin {
-    fn id(&self) -> &str { "mysql" }
-    fn name(&self) -> &str { "MySQL" }
-    fn icon(&self) -> &str { "database" }
-
+    fn id(&self) -> &str {
+        "mysql"
+    }
+    fn name(&self) -> &str {
+        "MySQL"
+    }
+    fn icon(&self) -> &str {
+        "database"
+    }
     fn features(&self) -> Vec<ToolFeature> {
         vec![
-            ToolFeature { id: "version-check".into(), name: "版本检测".into(), icon: "check-circle".into() },
-            ToolFeature { id: "auto-uninstall".into(), name: "自动卸载".into(), icon: "trash".into() },
-            ToolFeature { id: "residue-clear".into(), name: "残留清除".into(), icon: "broom".into() },
-            ToolFeature { id: "password-reset".into(), name: "密码重置".into(), icon: "key".into() },
-            ToolFeature { id: "password-change".into(), name: "密码修改".into(), icon: "edit-key".into() },
+            ToolFeature { id: "instances".into(), name: "版本检测".into(), icon: "check-circle".into() },
+            ToolFeature { id: "downloads".into(), name: "可用版本".into(), icon: "download".into() },
+            ToolFeature { id: "cleanup".into(), name: "卸载清理".into(), icon: "trash".into() },
+            ToolFeature { id: "password".into(), name: "密码管理".into(), icon: "key".into() },
         ]
     }
 
-    fn command_names(&self) -> Vec<&str> {
-        vec![
-            "detect_mysql", "uninstall_mysql", "scan_mysql_residuals",
-            "clean_mysql_residuals", "reset_mysql_password",
-            "change_mysql_password", "start_mysql_service", "stop_mysql_service",
-        ]
+    fn invoke_handler(&self) -> Box<dyn Fn(Invoke<Wry>) -> bool + Send + Sync + 'static> {
+        Box::new(tauri::generate_handler![
+            commands::detect_mysql,
+            commands::uninstall_mysql,
+            commands::scan_mysql_residuals,
+            commands::clean_mysql_residuals,
+            commands::reset_mysql_password,
+            commands::change_mysql_password,
+            commands::start_mysql_service,
+            commands::stop_mysql_service,
+            commands::get_available_mysql_versions,
+            commands::download_mysql,
+        ])
     }
 
-    fn needs_admin(&self, command: &str) -> bool {
-        !matches!(command, "detect_mysql")
+    fn command_names(&self) -> &'static [&'static str] {
+        &[
+            "detect_mysql",
+            "uninstall_mysql",
+            "scan_mysql_residuals",
+            "clean_mysql_residuals",
+            "reset_mysql_password",
+            "change_mysql_password",
+            "start_mysql_service",
+            "stop_mysql_service",
+            "get_available_mysql_versions",
+            "download_mysql",
+        ]
     }
 }

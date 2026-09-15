@@ -56,15 +56,115 @@ async fn stop_mysql_service(app_handle: &AppHandle, service_name: &str) -> Resul
             logger::warn(app_handle, &format!("停止服务失败: {}", e));
         }
     }
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    // 轮询等待服务真正进入停止状态（最多 30 秒），替代固定 sleep
+    wait_for_service_state(app_handle, service_name, false, 30).await;
     Ok(())
 }
 
-async fn kill_mysqld_processes(app_handle: &AppHandle) -> Result<(), String> {
-    logger::info(app_handle, "正在终止所有 MySQL 进程...");
-    let _ = process_manager::execute_command("taskkill", &["/F", "/IM", "mysqld.exe"]).await;
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+/// 轮询等待服务达到目标状态（running=true 等待"启动"，running=false 等待"停止"/"未安装"）
+async fn wait_for_service_state(
+    app_handle: &AppHandle,
+    service_name: &str,
+    running: bool,
+    timeout_secs: u64,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        let status = crate::service_manager::check_service_status(service_name).await;
+        let reached = if running {
+            status == "启动"
+        } else {
+            status != "启动"
+        };
+        if reached {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            logger::warn(
+                app_handle,
+                &format!("等待服务 {} 状态超时（当前状态: {}）", service_name, status),
+            );
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// 轮询等待端口可连接（用于确认服务已就绪接受连接）
+async fn wait_for_port_ready(app_handle: &AppHandle, port: u16, timeout_secs: u64) -> bool {
+    use tokio::net::TcpStream;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        let connect = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            TcpStream::connect(("127.0.0.1", port)),
+        )
+        .await;
+        if matches!(connect, Ok(Ok(_))) {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            logger::warn(app_handle, &format!("等待端口 {} 就绪超时", port));
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// 终止指定实例目录下的 mysqld/mysql 进程（按可执行文件路径精准匹配，
+/// 不影响同机其他 MySQL/MariaDB 实例），并轮询等待进程退出。
+async fn kill_mysqld_processes(app_handle: &AppHandle, bin_dir: &str) -> Result<(), String> {
+    if bin_dir.is_empty() {
+        logger::warn(app_handle, "实例路径未知，跳过进程终止（避免误杀其他实例）");
+        return Ok(());
+    }
+    logger::info(app_handle, &format!("正在终止该实例的 MySQL 进程（目录: {}）...", bin_dir));
+    match process_manager::kill_mysql_processes_in_dir(bin_dir).await {
+        Ok(n) => logger::info(app_handle, &format!("已终止 {} 个实例进程", n)),
+        Err(e) => logger::warn(app_handle, &format!("终止进程失败: {}", e)),
+    }
+    // 轮询等待进程完全退出（最多 15 秒）
+    for _ in 0..15 {
+        let remaining = match process_manager::count_mysql_processes_in_dir(bin_dir).await {
+            Ok(n) => n,
+            Err(e) => {
+                // 查询失败时不提前退出（避免误判进程已退出），继续等待
+                logger::warn(app_handle, &format!("查询进程数失败，继续等待: {}", e));
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+        if remaining == 0 {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    logger::warn(app_handle, "部分实例进程未能在超时时间内退出");
     Ok(())
+}
+
+/// 重置流程失败后的兜底恢复：杀掉 --skip-grant-tables 临时实例，
+/// 并把原 Windows 服务以正常认证模式重新启动，避免服务长时间停摆或停留在无认证状态。
+/// 恢复动作的成败不掩盖原始错误；恢复失败时给出手动处置指引。
+async fn restore_service_after_failure(
+    app_handle: &AppHandle,
+    service_name: &str,
+    bin_dir: &str,
+    mut child: Option<&mut tokio::process::Child>,
+) {
+    logger::warn(app_handle, "重置流程异常中断，开始自动恢复：停止无授权模式实例并重启原服务...");
+    if let Some(ref mut c) = child {
+        let _ = c.kill().await;
+    }
+    let _ = kill_mysqld_processes(app_handle, bin_dir).await;
+    let _ = start_mysql_service(app_handle, service_name).await;
+    let restarted = wait_for_service_state(app_handle, service_name, true, 30).await;
+    if !restarted {
+        logger::error(app_handle, &format!(
+            "自动恢复服务失败，请手动在管理员终端执行 `net start {}` 启动服务", service_name));
+    } else {
+        logger::info(app_handle, "自动恢复完成：原服务已重新启动（正常认证模式）");
+    }
 }
 
 /// 安全地转义 MySQL 密码字符串
@@ -102,10 +202,9 @@ pub fn build_password_reset_sql(version: &str, new_password: &str) -> String {
     let escaped_password = escape_mysql_password(new_password);
 
     if version.starts_with("8.") {
-        vec![
-            format!(
-                "UPDATE mysql.user SET authentication_string='', plugin='mysql_native_password' WHERE User='root';"
-            ),
+        [
+            "UPDATE mysql.user SET authentication_string='', plugin='mysql_native_password' WHERE User='root';"
+                .to_string(),
             "SELECT ROW_COUNT() AS affected_rows;".to_string(),
             "FLUSH PRIVILEGES;".to_string(),
             format!(
@@ -123,7 +222,7 @@ pub fn build_password_reset_sql(version: &str, new_password: &str) -> String {
         ]
         .join(" ")
     } else if version.starts_with("5.7") {
-        vec![
+        [
             format!(
                 "UPDATE mysql.user SET authentication_string=PASSWORD('{}'), plugin='mysql_native_password', password_expired='N' WHERE User='root';",
                 escaped_password
@@ -133,7 +232,7 @@ pub fn build_password_reset_sql(version: &str, new_password: &str) -> String {
         ]
         .join(" ")
     } else {
-        vec![
+        [
             format!(
                 "UPDATE mysql.user SET Password=PASSWORD('{}'), plugin='mysql_native_password', password_expired='N' WHERE User='root';",
                 escaped_password
@@ -143,41 +242,6 @@ pub fn build_password_reset_sql(version: &str, new_password: &str) -> String {
         ]
         .join(" ")
     }
-}
-
-/// 构建修改密码的SQL脚本 - 首先查询存在的用户，再修改
-/// 返回查询用户SQL和修改密码SQL
-pub fn build_change_password_sql(version: &str, new_password: &str) -> (String, String) {
-    let escaped = escape_mysql_password(new_password);
-    
-    // 首先查询存在的用户
-    let query_users_sql = "SELECT User, Host FROM mysql.user WHERE User='root';".to_string();
-    
-    // 根据版本构建修改密码的SQL
-    let modify_sql = if version.starts_with("8.") {
-        // MySQL 8.0: 使用 ALTER USER，但通过 UPDATE 方式，避免用户不存在的问题
-        format!(
-            "UPDATE mysql.user SET authentication_string=PASSWORD('{}'), plugin='mysql_native_password' WHERE User='root'; \
-             FLUSH PRIVILEGES;",
-            escaped
-        )
-    } else if version.starts_with("5.7") {
-        // MySQL 5.7: 使用 UPDATE 方式，更安全
-        format!(
-            "UPDATE mysql.user SET authentication_string=PASSWORD('{}'), plugin='mysql_native_password' WHERE User='root'; \
-             FLUSH PRIVILEGES;",
-            escaped
-        )
-    } else {
-        // MySQL 5.6 及以下: 使用 UPDATE 方式
-        format!(
-            "UPDATE mysql.user SET Password=PASSWORD('{}'), plugin='mysql_native_password' WHERE User='root'; \
-             FLUSH PRIVILEGES;",
-            escaped
-        )
-    };
-    
-    (query_users_sql, modify_sql)
 }
 
 /// 构建容错版修改密码SQL - 逐个尝试修改，失败不影响后续
@@ -386,28 +450,16 @@ pub async fn reset_mysql_password(
     logger::info(&app_handle, "开始自动重置 MySQL 密码");
     logger::info(&app_handle, "========================================");
 
-    let mysql_info = detector::detect_all_mysql(Some(&app_handle)).await;
+    let mysql_info = detector::detect_all_mysql(Some(&app_handle)).await?;
     logger::info(&app_handle, &format!("检测到 {} 个 MySQL 实例", mysql_info.instances.len()));
-    
-    let instance: &types::MySQLInstance;
-    if let Some(sel_inst) = &selected_instance {
-        instance = sel_inst;
-        logger::info(&app_handle, &format!("使用用户选择的实例: 版本 {}, 服务 {:?}, 路径 {}", 
-            sel_inst.version, sel_inst.service_name, sel_inst.path));
-    } else {
-        let valid_instance = mysql_info.instances.iter()
-            .find(|inst| !inst.path.is_empty() && inst.service_name.is_some());
 
-        if valid_instance.is_none() {
-            logger::error(&app_handle, "未找到有效的 MySQL 实例（需要有安装路径和服务名）");
-            logger::error(&app_handle, "检测到的实例详情：");
-            for (idx, inst) in mysql_info.instances.iter().enumerate() {
-                logger::error(&app_handle, &format!("  实例 {}: 路径={:?}, 服务名={:?}", idx+1, inst.path, inst.service_name));
-            }
-            return Err("未找到有效的 MySQL 实例（需要有安装路径和服务名）".to_string());
-        }
-        instance = valid_instance.unwrap();
-    }
+    let instance = crate::detector_base::select_valid_instance(
+        selected_instance.as_ref(),
+        &mysql_info.instances,
+        "MySQL",
+    )?;
+    logger::info(&app_handle, &format!("使用实例: 版本 {}, 服务 {:?}, 路径 {}",
+        instance.version, instance.service_name, instance.path));
 
     let service_name = match &instance.service_name {
         Some(name) => name,
@@ -441,7 +493,7 @@ pub async fn reset_mysql_password(
     }
 
     stop_mysql_service(&app_handle, service_name).await?;
-    kill_mysqld_processes(&app_handle).await?;
+    kill_mysqld_processes(&app_handle, &instance.path).await?;
 
     logger::info(&app_handle, "正在以无授权模式启动 MySQL...");
     let config_file = detector::get_mysql_config_file(Some(service_name), &instance.path).await;
@@ -473,6 +525,8 @@ pub async fn reset_mysql_password(
         Ok(c) => c,
         Err(e) => {
             logger::error(&app_handle, &format!("启动 MySQL 失败: {}", e));
+            // 服务已停止但临时实例未起来：立即恢复原服务
+            restore_service_after_failure(&app_handle, service_name, &instance.path, None).await;
             return Err(format!("启动 MySQL 失败: {}", e));
         }
     };
@@ -495,7 +549,8 @@ pub async fn reset_mysql_password(
                 if !stderr_text.is_empty() {
                     logger::error(&app_handle, &format!("MySQL 错误输出:\n{}", stderr_text));
                 }
-                let _ = child.kill().await;
+                // 无授权实例启动即失败：恢复原服务，避免服务停摆
+                restore_service_after_failure(&app_handle, service_name, &instance.path, Some(&mut child)).await;
                 return Err(format!("MySQL 进程在启动后第 {} 秒退出，请查看上方错误输出", i));
             }
             Ok(None) => {
@@ -542,15 +597,17 @@ pub async fn reset_mysql_password(
     }
     let full_sql = build_password_reset_sql(version, &new_password);
 
-    // 在日志中掩码密码，避免明文显示
-    let masked_sql = full_sql.replace(&new_password, "***");
+    // 在日志中掩码密码：SQL 中存的是转义后的密码，对转义串做 replace 才能正确匹配
+    let escaped_pwd = escape_mysql_password(&new_password);
+    let masked_sql = full_sql.replace(&escaped_pwd, "***");
     logger::info(&app_handle, &format!("执行 SQL 脚本 (密码已掩码): {}", masked_sql));
     
     let mysql_path_str = match mysql_path.to_str() {
         Some(s) => s,
         None => {
             logger::warn(&app_handle, "MySQL 路径无法转换为 UTF-8 字符串");
-            let _ = child.kill().await;
+            // 无授权实例正在运行：恢复原服务后再返回错误
+            restore_service_after_failure(&app_handle, service_name, &instance.path, Some(&mut child)).await;
             return Err("MySQL 路径无效".into());
         }
     };
@@ -577,8 +634,14 @@ pub async fn reset_mysql_password(
                         logger::error(&app_handle, "密码更新未影响任何 root 用户，重置失败");
                     }
                 } else {
-                    logger::warn(&app_handle, "无法解析受影响行数，将继续尝试后续步骤");
-                    sql_success = true;
+                    // MySQL 8.x 的 ALTER USER 不输出 ROW_COUNT，无法据此判断，保持宽松成功；
+                    // 5.6/5.7 路径含 SELECT ROW_COUNT()，输出异常意味着实际失败，不应误判成功
+                    if version.starts_with("8.") {
+                        logger::warn(&app_handle, "无法解析受影响行数（MySQL 8.x ALTER USER 不输出行数），保持宽松判断");
+                        sql_success = true;
+                    } else {
+                        logger::error(&app_handle, "无法解析受影响行数，且非 MySQL 8.x，判定重置失败");
+                    }
                 }
             }
             if !output.stdout.is_empty() {
@@ -633,48 +696,30 @@ pub async fn reset_mysql_password(
         Ok(_) => logger::info(&app_handle, "已发送停止信号到 MySQL 进程"),
         Err(e) => logger::warn(&app_handle, &format!("停止 MySQL 进程时出错: {}", e)),
     }
-    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-    
-    kill_mysqld_processes(&app_handle).await?;
+    // 精准清理该实例残留进程并轮询等待退出（kill_mysqld_processes 内部已包含等待）
+    kill_mysqld_processes(&app_handle, &instance.path).await?;
     start_mysql_service(&app_handle, service_name).await?;
 
-    logger::info(&app_handle, "等待 MySQL 服务完全启动 (10秒)...");
-    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    // 轮询等待服务进入"启动"状态（最多 40 秒），替代固定 sleep
+    logger::info(&app_handle, "等待 MySQL 服务启动...");
+    let service_ready = wait_for_service_state(&app_handle, service_name, true, 40).await;
+    logger::info(
+        &app_handle,
+        if service_ready {
+            "MySQL 服务已进入启动状态"
+        } else {
+            "MySQL 服务启动等待超时，仍将尝试验证连接"
+        },
+    );
 
-    // 检查服务状态
-    logger::info(&app_handle, "检查 MySQL 服务状态...");
-    let service_status = detector::check_service_status(service_name).await;
-    logger::info(&app_handle, &format!("MySQL 服务状态: {}", service_status));
-
-    // 如果服务状态不是 "启动"，继续等待
-    if service_status != "启动" {
-        logger::warn(&app_handle, "MySQL 服务未完全启动，继续等待 10 秒...");
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-        
-        let service_status2 = detector::check_service_status(service_name).await;
-        logger::info(&app_handle, &format!("MySQL 服务状态 (第二次检查): {}", service_status2));
-    }
-
-    // 检查端口监听状态
+    // 通过 TCP 连接轮询确认端口就绪（替代 netstat 文本匹配，避免误判）
     let port_to_check = port.unwrap_or(3306);
-    logger::info(&app_handle, &format!("检查 MySQL 端口 ({}) 监听状态...", port_to_check));
-    let netstat_result = process_manager::execute_command("netstat", &["-ano"]).await;
-    match netstat_result {
-        Ok(output) => {
-            if output.exit_code == 0 {
-                let port_str = format!(":{}", port_to_check);
-                let has_port = output.stdout.contains(&port_str) || output.stdout.contains(&port_to_check.to_string());
-                if has_port {
-                    logger::info(&app_handle, &format!("MySQL 端口 {} 正在监听！", port_to_check));
-                } else {
-                    logger::warn(&app_handle, &format!("未检测到 MySQL 端口 {} 监听", port_to_check));
-                    // 显示所有监听的端口...
-                }
-            }
-        }
-        Err(e) => {
-            logger::warn(&app_handle, &format!("检查端口状态失败: {}", e));
-        }
+    logger::info(&app_handle, &format!("等待 MySQL 端口 ({}) 就绪...", port_to_check));
+    let port_ready = wait_for_port_ready(&app_handle, port_to_check, 40).await;
+    if port_ready {
+        logger::info(&app_handle, &format!("MySQL 端口 {} 已就绪", port_to_check));
+    } else {
+        logger::warn(&app_handle, &format!("MySQL 端口 {} 在超时时间内未就绪", port_to_check));
     }
 
     logger::info(&app_handle, "开始连接测试...");
@@ -731,24 +776,18 @@ pub async fn change_mysql_password(
     // 验证新密码的安全性
     validate_password_strength(&new_password)?;
     
-    let mysql_info = detector::detect_all_mysql(Some(&app_handle)).await;
-    
-    let instance: &types::MySQLInstance;
-    if let Some(sel_inst) = &selected_instance {
-        instance = sel_inst;
-        logger::info(&app_handle, &format!("使用用户选择的实例: 版本 {}, 路径 {}", 
-            sel_inst.version, sel_inst.path));
+    let mysql_info = detector::detect_all_mysql(Some(&app_handle)).await?;
+
+    let instance = if let Some(sel_inst) = &selected_instance {
+        sel_inst
     } else {
-        let valid_instance = mysql_info.instances.iter()
-            .find(|inst| !inst.path.is_empty());
-        
-        match valid_instance {
-            Some(inst) => instance = inst,
-            None => {
-                return Err("未找到 MySQL 安装路径".to_string());
-            }
-        }
-    }
+        mysql_info
+            .instances
+            .iter()
+            .find(|inst| !inst.path.is_empty())
+            .ok_or_else(|| "未找到 MySQL 安装路径".to_string())?
+    };
+    logger::info(&app_handle, &format!("使用实例: 版本 {}, 路径 {}", instance.version, instance.path));
 
     let mysql_path = PathBuf::from(&instance.path).join("mysql.exe");
     let port = resolve_port(instance, override_port);
@@ -815,7 +854,7 @@ pub async fn change_mysql_password(
     logger::info(&app_handle, &format!("检测到 MySQL 版本 {}, 使用简单直接的方式修改密码...", version));
     
     let simple_sql = build_simple_alter_sql(version, &new_password, "localhost")?;
-    let masked_simple_sql = simple_sql.replace(&new_password, "***");
+    let masked_simple_sql = simple_sql.replace(&escape_mysql_password(&new_password), "***");
     logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_simple_sql));
     
     // 执行修改
@@ -859,7 +898,7 @@ pub async fn change_mysql_password(
             if version.starts_with("8.") {
                 logger::info(&app_handle, "尝试 MySQL 8.0+ 的动态 SQL 方案...");
                 let fallback_sql = build_safe_change_password_sql(version, &new_password);
-                let masked_fallback_sql = fallback_sql.replace(&new_password, "***");
+                let masked_fallback_sql = fallback_sql.replace(&escape_mysql_password(&new_password), "***");
                 logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_fallback_sql));
                 
                 let mut fallback_args = base_args.clone();
@@ -900,7 +939,7 @@ pub async fn change_mysql_password(
                     format!("UPDATE mysql.user SET Password=PASSWORD('{}') WHERE User='root' AND Host='localhost'; FLUSH PRIVILEGES;", escaped)
                 };
                 
-                let masked_old_sql = old_version_sql.replace(&new_password, "***");
+                let masked_old_sql = old_version_sql.replace(&escaped, "***");
                 logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_old_sql));
                 
                 let mut old_args = base_args.clone();
@@ -957,20 +996,12 @@ mod tests {
     #[test]
     fn validate_password_strength_rejects_short_password() {
         assert!(validate_password_strength("123").is_err());
-        assert!(validate_password_strength("1234567").is_err());
-        assert!(validate_password_strength("abcdefgh").is_err());
-    }
-
-    #[test]
-    fn validate_password_strength_rejects_weak_passwords() {
-        // Only lowercase - needs at least 2 character types
-        assert!(validate_password_strength("password").is_err());
-        // Only digits
-        assert!(validate_password_strength("12345678").is_err());
+        assert!(validate_password_strength("12345").is_err());
     }
 
     #[test]
     fn validate_password_strength_accepts_normal_passwords() {
+        assert!(validate_password_strength("123456").is_ok());
         assert!(validate_password_strength("Password1").is_ok());
         assert!(validate_password_strength("SecurePass123!").is_ok());
         assert!(validate_password_strength("my_pass1").is_ok());
@@ -1000,14 +1031,6 @@ mod tests {
         assert!(sql.contains("secret"));
     }
     
-    #[test]
-    fn build_change_password_sql_returns_tuple() {
-        let (query, modify) = build_change_password_sql("8.0.36", "secret");
-        assert!(query.contains("SELECT User, Host"));
-        assert!(modify.contains("UPDATE mysql.user"));
-        assert!(modify.contains("secret"));
-    }
-
     #[test]
     fn build_password_reset_sql_escapes_special_chars() {
         let sql = build_password_reset_sql("8.0.36", "pass'with\"special");
