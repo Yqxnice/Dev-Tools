@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { NButton, NTag, NSpace, NRadio, NRadioGroup } from 'naive-ui'
+import { ref, computed } from 'vue'
+import { NButton, NTag, NSpace, NRadio, NRadioGroup, NTabs, NTabPane, NEmpty } from 'naive-ui'
 import { open } from '@tauri-apps/plugin-shell'
 import { useMySQLStore } from '../../stores/mysqlStore'
 import { useLoggerStore } from '../../stores/loggerStore'
 import { useAppStore } from '../../stores/appStore'
 import { appService } from '../../services/appService'
-import DownloadList from '../shared/DownloadList.vue'
+import DownloadProgressCard from '../common/DownloadProgressCard.vue'
 import type { MySQLVersionInfo, MySQLPackageOption } from '../../types'
 
 const mysql = useMySQLStore()
@@ -15,12 +15,31 @@ const app = useAppStore()
 
 const downloadedPath = ref('')
 const downloadingVersion = ref('')
-// 每个版本选中的包类型（offline / online）
+const activeTab = ref<'server' | 'installer'>('server')
 const selectedPackageType = ref<Record<string, string>>({})
+
+const filteredVersions = computed<MySQLVersionInfo[]>(() =>
+  mysql.availableVersions.filter(v => v.mode === activeTab.value)
+)
+
+const tabDescription = computed(() =>
+  activeTab.value === 'server'
+    ? '独立安装包（MSI 安装包 / ZIP 压缩包，全量独立服务器）'
+    : '一体化管理器（离线版含全部组件，在线版仅下载安装器）'
+)
+
+/** 按分类分组 */
+const groupedVersions = computed(() => {
+  const map = new Map<string, MySQLVersionInfo[]>()
+  for (const v of filteredVersions.value) {
+    if (!map.has(v.category)) map.set(v.category, [])
+    map.get(v.category)!.push(v)
+  }
+  return Array.from(map, ([key, items]) => ({ key, items }))
+})
 
 function getSelectedPackage(v: MySQLVersionInfo): MySQLPackageOption | undefined {
   const type = selectedPackageType.value[v.version]
-  // 无显式选择时返回 undefined，不静默回退到第一个包
   return type ? v.packages.find(p => p.package_type === type) : undefined
 }
 
@@ -33,7 +52,6 @@ async function handleRefresh() {
   log.addLog('info', '正在获取 MySQL 可用版本列表...')
   try {
     const result = await mysql.loadAvailableVersions()
-    // 刷新仅更新列表并清空选择状态，不做任何默认选中
     selectedPackageType.value = {}
     log.addLog('info', `获取完成，共 ${result.length} 个版本`)
   } catch (e) { log.addLog('error', `获取失败: ${e}`) }
@@ -70,53 +88,119 @@ async function downloadBrowser(v: MySQLVersionInfo) {
 function handleRetry() {
   if (mysql.downloadProgress?.completed && !mysql.downloadProgress.success) {
     const ver = mysql.downloadProgress.version
-    const match = mysql.availableVersions.find(v => v.version === ver)
+    const match = mysql.availableVersions.find(v => v.version == ver)
     if (match) downloadLocal(match)
   }
 }
 </script>
 
 <template>
-  <DownloadList
-    title="MySQL 可用版本"
-    description="选择版本与安装包类型（离线版包含全部组件，在线版仅下载安装器）"
-    :versions="mysql.availableVersions as MySQLVersionInfo[]"
-    :loading="mysql.loading"
-    :progress="mysql.downloadProgress"
-    :downloaded-path="downloadedPath"
-    :product-label="downloadingVersion ? `MySQL ${downloadingVersion}` : 'MySQL'"
-    :has-ongoing-task="mysql.downloadingKey !== null"
-    count-suffix="个版本"
-    @refresh="handleRefresh"
-    @dismiss="mysql.dismissDownloadProgress(); downloadedPath = ''"
-    @pause="mysql.pauseDownload()"
-    @resume="mysql.resumeDownload()"
-    @cancel="mysql.cancelDownload()"
-    @retry="handleRetry"
-  >
-    <template #row="{ item }">
-      <div class="version-row-info">
-        <span class="version-row-name">MySQL</span>
-        <span class="version-row-ver">{{ item.version }}</span>
-        <n-tag type="success" size="small">推荐</n-tag>
+  <div class="feature-panel mysql-versions-panel">
+    <div class="feature-header">
+      <div>
+        <h3>MySQL 可用版本</h3>
+        <p>{{ tabDescription }}</p>
       </div>
-      <div class="version-row-pkg">
-        <n-radio-group v-model:value="selectedPackageType[item.version]" name="pkg">
-          <n-space>
-            <n-radio v-for="pkg in item.packages" :key="pkg.package_type" :value="pkg.package_type">
-              {{ pkg.display_name }}
-            </n-radio>
-          </n-space>
-        </n-radio-group>
-      </div>
-      <n-space>
-        <n-button type="primary" size="small" :disabled="mysql.downloadingKey !== null"
-          :loading="mysql.downloadingKey === getCurrentDownloadKey(item)"
-          @click="downloadLocal(item)">
-          {{ mysql.downloadingKey === getCurrentDownloadKey(item) ? '下载中...' : '本地下载' }}
-        </n-button>
-        <n-button type="default" size="small" @click="downloadBrowser(item)">浏览器下载</n-button>
-      </n-space>
-    </template>
-  </DownloadList>
+      <n-button type="primary" :loading="mysql.loading" @click="handleRefresh">
+        {{ mysql.loading ? '加载中...' : '刷新列表' }}
+      </n-button>
+    </div>
+
+    <DownloadProgressCard
+      :product-label="downloadingVersion ? `MySQL ${downloadingVersion}` : 'MySQL'"
+      :progress="mysql.downloadProgress"
+      :downloaded-path="downloadedPath"
+      :has-ongoing-task="mysql.downloadingKey !== null"
+      @dismiss="mysql.dismissDownloadProgress(); downloadedPath = ''"
+      @pause="mysql.pauseDownload()"
+      @resume="mysql.resumeDownload()"
+      @cancel="mysql.cancelDownload()"
+      @retry="handleRetry"
+    />
+
+    <n-tabs v-model:value="activeTab" type="segment" size="small" class="mode-tabs">
+      <n-tab-pane name="server" tab="独立安装包">
+        <div class="section-label">
+          <span>可用版本</span>
+          <n-tag type="info" size="small">{{ filteredVersions.length }} 个版本</n-tag>
+        </div>
+        <div class="instance-list">
+          <template v-for="grp in groupedVersions" :key="grp.key">
+            <div class="group-header">{{ grp.key }}</div>
+            <div v-for="v in grp.items" :key="v.version" class="version-row">
+              <div class="version-row-info">
+                <span class="version-row-name">MySQL</span>
+                <span class="version-row-ver">{{ v.version }}</span>
+              </div>
+              <div class="version-row-pkg">
+                <n-radio-group v-model:value="selectedPackageType[v.version]" :name="'pkg-'+v.version">
+                  <n-space>
+                    <n-radio v-for="pkg in v.packages" :key="pkg.package_type" :value="pkg.package_type">
+                      {{ pkg.display_name }}
+                    </n-radio>
+                  </n-space>
+                </n-radio-group>
+              </div>
+              <n-space>
+                <n-button type="primary" size="small" :disabled="mysql.downloadingKey !== null"
+                  :loading="mysql.downloadingKey === getCurrentDownloadKey(v)"
+                  @click="downloadLocal(v)">
+                  {{ mysql.downloadingKey === getCurrentDownloadKey(v) ? '下载中...' : '本地下载' }}
+                </n-button>
+                <n-button type="default" size="small" @click="downloadBrowser(v)">浏览器下载</n-button>
+              </n-space>
+            </div>
+          </template>
+          <n-empty v-if="groupedVersions.length === 0" description="点击「刷新列表」获取可用版本" size="small" />
+        </div>
+      </n-tab-pane>
+      <n-tab-pane name="installer" tab="一体化管理器">
+        <div class="section-label">
+          <span>可用版本</span>
+          <n-tag type="info" size="small">{{ filteredVersions.length }} 个版本</n-tag>
+        </div>
+        <div class="instance-list">
+          <template v-for="grp in groupedVersions" :key="grp.key">
+            <div class="group-header">{{ grp.key }}</div>
+            <div v-for="v in grp.items" :key="v.version" class="version-row">
+              <div class="version-row-info">
+                <span class="version-row-name">MySQL</span>
+                <span class="version-row-ver">{{ v.version }}</span>
+              </div>
+              <div class="version-row-pkg">
+                <n-radio-group v-model:value="selectedPackageType[v.version]" :name="'pkg-'+v.version">
+                  <n-space>
+                    <n-radio v-for="pkg in v.packages" :key="pkg.package_type" :value="pkg.package_type">
+                      {{ pkg.display_name }}
+                    </n-radio>
+                  </n-space>
+                </n-radio-group>
+              </div>
+              <n-space>
+                <n-button type="primary" size="small" :disabled="mysql.downloadingKey !== null"
+                  :loading="mysql.downloadingKey === getCurrentDownloadKey(v)"
+                  @click="downloadLocal(v)">
+                  {{ mysql.downloadingKey === getCurrentDownloadKey(v) ? '下载中...' : '本地下载' }}
+                </n-button>
+                <n-button type="default" size="small" @click="downloadBrowser(v)">浏览器下载</n-button>
+              </n-space>
+            </div>
+          </template>
+          <n-empty v-if="groupedVersions.length === 0" description="点击「刷新列表」获取可用版本" size="small" />
+        </div>
+      </n-tab-pane>
+    </n-tabs>
+  </div>
 </template>
+
+<style scoped>
+.mysql-versions-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.mode-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mode-tabs :deep(.n-tabs-nav) { flex-shrink: 0; padding: 0; margin: 0; }
+.mode-tabs :deep(.n-tabs-pane-wrapper) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mode-tabs :deep(.n-tab-pane) { padding: 0; flex: 1; min-height: 0; overflow-y: auto; }
+</style>

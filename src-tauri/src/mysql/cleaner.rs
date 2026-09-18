@@ -1,5 +1,5 @@
 use super::uninstaller;
-use super::super::{logger, process_manager, types::MySQLInstance};
+use super::super::{detector_base, logger, process_manager, types::MySQLInstance};
 use super::super::types::{CleanOptions, CleanResult, CleanScanResult, ScannedPath};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -66,7 +66,7 @@ pub fn derive_server_folder_name(instance: &MySQLInstance) -> String {
     }
 
     let pattern = derive_version_pattern(&instance.version);
-    if !pattern.is_empty() && pattern != "未知" {
+    if !pattern.is_empty() && pattern != detector_base::ARCH_UNKNOWN {
         format!("MySQL Server {}", pattern)
     } else {
         "MySQL Server".to_string()
@@ -388,7 +388,7 @@ pub async fn scan_mysql_residuals(
     let mut services: Vec<String> = Vec::new();
     if let Some(svc_name) = &targets.service_name {
         let status = crate::service_manager::check_service_status(svc_name).await;
-        if status != "未安装" {
+        if status != detector_base::STATUS_NOT_INSTALLED {
             services.push(svc_name.clone());
         }
     }
@@ -869,7 +869,7 @@ mod tests {
         let instance = MySQLInstance {
             version: "5.6.51".to_string(),
             architecture: "x86_64".to_string(),
-            status: "停止".to_string(),
+            status: detector_base::STATUS_STOPPED.to_string(),
             path: String::new(),
             service_name: Some("MySQL56".to_string()),
             port: Some(3306),
@@ -886,7 +886,7 @@ mod tests {
         let instance = MySQLInstance {
             version: "5.7.44".to_string(),
             architecture: "x86_64".to_string(),
-            status: "停止".to_string(),
+            status: detector_base::STATUS_STOPPED.to_string(),
             path: r"C:\Program Files\MySQL\MySQL Server 5.7\bin".to_string(),
             service_name: Some("MySQL57".to_string()),
             port: None,

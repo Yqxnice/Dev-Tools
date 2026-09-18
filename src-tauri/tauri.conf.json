@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Dev Tools",
-        "width": 1200,
-        "height": 800,
+        "width": 800,
+        "height": 700,
         "resizable": true,
         "minWidth": 1024,
         "minHeight": 680,
@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "plugins": {

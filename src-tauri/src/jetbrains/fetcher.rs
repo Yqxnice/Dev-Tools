@@ -1,20 +1,11 @@
 use super::super::{
     download_control,
+    http_client,
     logger,
     types::{JetBrainsVersionDetail, JetBrainsVersionInfo, JetBrainsPackageOption},
 };
-use once_cell::sync::Lazy;
 use std::path::PathBuf;
-use std::time::Duration;
 use tauri::AppHandle;
-
-/// 共享 HTTP 客户端：仅设连接超时，流式下载不受总超时限制
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
-});
 
 /// JetBrains 全家桶产品代号（API code）与展示名映射
 pub static JETBRAINS_PRODUCTS: &[(&str, &str)] = &[
@@ -215,7 +206,7 @@ pub async fn get_jetbrains_product_versions(
 /// 拉取单个产品的发行版列表
 async fn fetch_product_releases(code: &str, latest_only: bool) -> Result<Vec<ApiRelease>, String> {
     let url = releases_api_url(code, latest_only);
-    let resp = HTTP_CLIENT
+    let resp = http_client::default_client()
         .get(&url)
         .send()
         .await
@@ -272,7 +263,7 @@ async fn verify_installer(
         return Ok(());
     }
 
-    match HTTP_CLIENT.get(checksum_link).send().await {
+    match http_client::default_client().get(checksum_link).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = resp.text().await.unwrap_or_default();
             // JetBrains checksum 文件格式通常为 "<hash>  <filename>" 或纯 hash
@@ -363,7 +354,7 @@ pub async fn download_jetbrains(
         &download.link,
         &file_path,
         &version,
-        &HTTP_CLIENT,
+        http_client::default_client(),
         3,
     )
     .await?;

@@ -1,0 +1,30 @@
+{
+  "categories": [
+    { "id": "language", "name": "编程语言" },
+    { "id": "framework", "name": "框架/库" },
+    { "id": "ide", "name": "编程软件" },
+    { "id": "software", "name": "电脑软件" }
+  ],
+  "items": [
+    { "name": "Anaconda", "category": "software", "url": "https://www.anaconda.com/" },
+    { "name": "CodeBuddy CN", "category": "ide", "url": "https://codebuddy.cn/" },
+    { "name": "Cursor", "category": "ide", "url": "https://www.cursor.com/" },
+    { "name": "Git", "category": "software", "url": "https://git-scm.com/" },
+    { "name": "HBuilder", "category": "ide", "url": "https://www.dcloud.io/hbuilderx.html" },
+    { "name": "Java", "category": "language", "url": "https://www.java.com/" },
+    { "name": "MySQL", "category": "software", "url": "https://www.mysql.com/" },
+    { "name": "Node.js", "category": "language", "url": "https://nodejs.org/" },
+    { "name": "OpenCode", "category": "ide", "url": "https://opencode.ai/" },
+    { "name": "PostgreSQL", "category": "software", "url": "https://www.postgresql.org/" },
+    { "name": "Python", "category": "language", "url": "https://www.python.org/" },
+    { "name": "Qoder", "category": "ide", "url": "https://qoder.com/" },
+    { "name": "React", "category": "framework", "url": "https://react.dev/" },
+    { "name": "Tauri", "category": "framework", "url": "https://tauri.app/" },
+    { "name": "Trae CN", "category": "ide", "url": "https://www.trae.cn/" },
+    { "name": "Trae International", "category": "ide", "url": "https://www.trae.ai/" },
+    { "name": "TRAE Work CN", "category": "ide", "url": "https://www.trae.cn/" },
+    { "name": "VS Code", "category": "ide", "url": "https://code.visualstudio.com/" },
+    { "name": "Vue", "category": "framework", "url": "https://vuejs.org/" },
+    { "name": "微信小程序", "category": "framework", "url": "https://developers.weixin.qq.com/miniprogram/dev/framework/" }
+  ]
+}

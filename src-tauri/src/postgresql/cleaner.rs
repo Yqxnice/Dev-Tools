@@ -1,5 +1,5 @@
 use super::uninstaller;
-use super::super::{logger, process_manager, types::PostgresqlInstance};
+use super::super::{detector_base, logger, process_manager, types::PostgresqlInstance};
 use super::super::types::{CleanOptions, CleanResult, CleanScanResult, ScannedPath};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -241,7 +241,7 @@ pub async fn scan_postgresql_residuals(
     let mut services: Vec<String> = Vec::new();
     if let Some(svc_name) = &targets.service_name {
         let status = crate::service_manager::check_service_status(svc_name).await;
-        if status != "未安装" {
+        if status != detector_base::STATUS_NOT_INSTALLED {
             services.push(svc_name.clone());
         }
     }

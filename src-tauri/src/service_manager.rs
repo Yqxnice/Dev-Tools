@@ -3,7 +3,7 @@
 //! 通过 windows crate 的 ServiceManager API 直接调用，替代 sc.exe 命令字符串解析。
 //! 所有同步 Win32 API 调用包装在 `tokio::task::spawn_blocking` 中，避免阻塞 runtime。
 
-use crate::logger;
+use crate::{detector_base, error::{AppError, AppResult}, logger};
 use tauri::AppHandle;
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::System::Services::{
@@ -28,8 +28,8 @@ const SERVICE_RUNNING_STATE: u32 = 4;
 /// SERVICE_STATE_ALL
 const SERVICE_STATE_ALL: u32 = 3;
 
-/// 将 &str 转换为以 null 结尾的 UTF-16 宽字符序列
-fn to_wide(s: &str) -> Vec<u16> {
+/// 将 &str 转换为以 null 结尾的 UTF-16 宽字符序列（crate 内共享）
+pub(crate) fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
@@ -120,21 +120,21 @@ pub async fn check_service_exists(service_name: &str) -> bool {
     .unwrap_or(false)
 }
 
-/// 查询服务状态：返回 "启动"/"停止"/"未安装"
+/// 查询服务状态：返回 STATUS_RUNNING / STATUS_STOPPED / STATUS_NOT_INSTALLED
 pub async fn check_service_status(service_name: &str) -> String {
     let name = service_name.to_string();
     tokio::task::spawn_blocking(move || -> String {
         unsafe {
             let scm = match OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT) {
                 Ok(h) => h,
-                Err(_) => return "未安装".to_string(),
+                Err(_) => return detector_base::STATUS_NOT_INSTALLED.to_string(),
             };
             let wide = to_wide(&name);
             let svc = match OpenServiceW(scm, PCWSTR(wide.as_ptr()), SERVICE_QUERY_STATUS) {
                 Ok(h) => h,
                 Err(_) => {
                     let _ = CloseServiceHandle(scm);
-                    return "未安装".to_string();
+                    return detector_base::STATUS_NOT_INSTALLED.to_string();
                 }
             };
             let mut status = SERVICE_STATUS::default();
@@ -142,19 +142,19 @@ pub async fn check_service_status(service_name: &str) -> String {
             let _ = CloseServiceHandle(svc);
             let _ = CloseServiceHandle(scm);
             if !ok {
-                return "未安装".to_string();
+                return detector_base::STATUS_NOT_INSTALLED.to_string();
             }
             let current = status.dwCurrentState.0;
             if current == SERVICE_RUNNING_STATE {
-                "启动".to_string()
+                detector_base::STATUS_RUNNING.to_string()
             } else {
                 // STOPPED / START_PENDING / STOP_PENDING 等统一归为停止
-                "停止".to_string()
+                detector_base::STATUS_STOPPED.to_string()
             }
         }
     })
     .await
-    .unwrap_or_else(|_| "未安装".to_string())
+    .unwrap_or_else(|_| detector_base::STATUS_NOT_INSTALLED.to_string())
 }
 
 /// 获取服务对应的可执行文件所在目录（bin 目录）
@@ -280,31 +280,42 @@ pub async fn start_service(
     app_handle: &AppHandle,
     tool_name: &str,
     service_name: &str,
-) -> Result<(), String> {
+) -> AppResult<()> {
     logger::info(
         app_handle,
         &format!("正在启动 {} 服务: {}", tool_name, service_name),
     );
     let svc = service_name.to_string();
-    let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let result = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         unsafe {
             let scm = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT)
-                .map_err(|e| format!("打开 SCM 失败: {}", e))?;
+                .map_err(|e| AppError::CommandExecution(format!("打开 SCM 失败: {}", e)))?;
             let wide = to_wide(&svc);
             let handle = OpenServiceW(scm, PCWSTR(wide.as_ptr()), SERVICE_START).map_err(|e| {
                 let _ = CloseServiceHandle(scm);
-                format!("打开服务失败: {}", e)
+                AppError::CommandExecution(format!("打开服务失败: {}", e))
             })?;
             let result = StartServiceW(handle, None);
             let _ = CloseServiceHandle(handle);
             let _ = CloseServiceHandle(scm);
-            result.map_err(|e| format!("启动服务失败: {}", e))
+            result.map_err(|e| AppError::CommandExecution(format!("启动服务失败: {}", e)))
         }
     })
     .await
-    .map_err(|e| format!("启动任务异常: {}", e))?;
+    .map_err(|e| AppError::CommandExecution(format!("启动任务异常: {}", e)))?;
     match result {
         Ok(()) => {
+            // StartServiceW 返回后服务应已进入 RUNNING，但大型数据库（MySQL 等）
+            // 可能存在 SCM 状态传播延迟。轮询确认，防止紧随其后的 detect 读到
+            // START_PENDING（被 check_service_status 归为"停止"）导致 UI 不更新。
+            let svc_name = service_name.to_string();
+            for _ in 0..10 {
+                let status = check_service_status(&svc_name).await;
+                if status == detector_base::STATUS_RUNNING {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
             logger::info(
                 app_handle,
                 &format!("{} 服务 {} 启动成功", tool_name, service_name),
@@ -326,30 +337,30 @@ pub async fn stop_service(
     app_handle: &AppHandle,
     tool_name: &str,
     service_name: &str,
-) -> Result<(), String> {
+) -> AppResult<()> {
     logger::info(
         app_handle,
         &format!("正在停止 {} 服务: {}", tool_name, service_name),
     );
     let svc = service_name.to_string();
-    let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+    let result = tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         unsafe {
             let scm = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT)
-                .map_err(|e| format!("打开 SCM 失败: {}", e))?;
+                .map_err(|e| AppError::CommandExecution(format!("打开 SCM 失败: {}", e)))?;
             let wide = to_wide(&svc);
             let handle = OpenServiceW(scm, PCWSTR(wide.as_ptr()), SERVICE_STOP).map_err(|e| {
                 let _ = CloseServiceHandle(scm);
-                format!("打开服务失败: {}", e)
+                AppError::CommandExecution(format!("打开服务失败: {}", e))
             })?;
             let mut status = SERVICE_STATUS::default();
             let result = ControlService(handle, SERVICE_CONTROL_STOP, &mut status);
             let _ = CloseServiceHandle(handle);
             let _ = CloseServiceHandle(scm);
-            result.map_err(|e| format!("停止服务失败: {}", e))
+            result.map_err(|e| AppError::CommandExecution(format!("停止服务失败: {}", e)))
         }
     })
     .await
-    .map_err(|e| format!("停止任务异常: {}", e))?;
+    .map_err(|e| AppError::CommandExecution(format!("停止任务异常: {}", e)))?;
     match result {
         Ok(()) => {
             logger::info(
@@ -369,23 +380,23 @@ pub async fn stop_service(
 }
 
 /// 标记指定服务为删除（卸载场景使用）
-pub async fn delete_service(service_name: &str) -> Result<(), String> {
+pub async fn delete_service(service_name: &str) -> AppResult<()> {
     let svc = service_name.to_string();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
+    tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         unsafe {
             let scm = OpenSCManagerW(PCWSTR::null(), PCWSTR::null(), SC_MANAGER_CONNECT)
-                .map_err(|e| format!("打开 SCM 失败: {}", e))?;
+                .map_err(|e| AppError::CommandExecution(format!("打开 SCM 失败: {}", e)))?;
             let wide = to_wide(&svc);
             let handle = OpenServiceW(scm, PCWSTR(wide.as_ptr()), DELETE_ACCESS).map_err(|e| {
                 let _ = CloseServiceHandle(scm);
-                format!("打开服务失败: {}", e)
+                AppError::CommandExecution(format!("打开服务失败: {}", e))
             })?;
             let result = DeleteService(handle);
             let _ = CloseServiceHandle(handle);
             let _ = CloseServiceHandle(scm);
-            result.map_err(|e| format!("删除服务失败: {}", e))
+            result.map_err(|e| AppError::CommandExecution(format!("删除服务失败: {}", e)))
         }
     })
     .await
-    .map_err(|e| format!("删除任务异常: {}", e))?
+    .map_err(|e| AppError::CommandExecution(format!("删除任务异常: {}", e)))?
 }

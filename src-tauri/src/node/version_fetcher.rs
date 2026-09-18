@@ -1,18 +1,9 @@
-use super::super::{logger, types::AvailableNodeVersion};
+use super::super::{http_client, logger, types::AvailableNodeVersion};
 use regex::Regex;
-use reqwest;
 use tauri::AppHandle;
 use once_cell::sync::Lazy;
-use std::time::Duration;
 
 static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+\.\d+\.\d+$").unwrap());
-
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
-});
 
 /// 镜像源列表，按顺序尝试
 const MIRRORS: &[(&str, &str)] = &[
@@ -25,7 +16,7 @@ const MIRRORS: &[(&str, &str)] = &[
 /// 从指定镜像获取 index.json
 async fn fetch_index(mirror_url: &str) -> Result<Vec<AvailableNodeVersion>, String> {
     let url = format!("{}index.json", mirror_url);
-    let response = HTTP_CLIENT
+    let response = http_client::default_client()
         .get(&url)
         .send()
         .await

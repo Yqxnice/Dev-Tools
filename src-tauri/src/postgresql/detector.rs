@@ -175,11 +175,15 @@ pub async fn get_postgresql_data_dir(bin_path: &str) -> Option<String> {
 }
 
 pub async fn start_postgresql_service(app_handle: AppHandle, service_name: String) -> Result<(), String> {
-    service_manager::start_service(&app_handle, "PostgreSQL", &service_name).await
+    service_manager::start_service(&app_handle, "PostgreSQL", &service_name)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn stop_postgresql_service(app_handle: AppHandle, service_name: String) -> Result<(), String> {
-    service_manager::stop_service(&app_handle, "PostgreSQL", &service_name).await
+    service_manager::stop_service(&app_handle, "PostgreSQL", &service_name)
+        .await
+        .map_err(Into::into)
 }
 
 /// 终止指定实例目录下的 postgres.exe 进程（按可执行文件路径精准匹配）
@@ -270,10 +274,10 @@ pub async fn detect_postgresql(app_handle: Option<&AppHandle>) -> Result<Postgre
                         let a = parse_architecture(&output.stdout);
                         (v, a)
                     } else {
-                        (svc_version.clone().unwrap_or_else(|| "未知版本".to_string()), "未知".to_string())
+                        (svc_version.clone().unwrap_or_else(|| detector_base::VERSION_UNKNOWN.to_string()), detector_base::ARCH_UNKNOWN.to_string())
                     }
                 } else {
-                    (svc_version.clone().unwrap_or_else(|| "未知版本".to_string()), "未知".to_string())
+                    (svc_version.clone().unwrap_or_else(|| detector_base::VERSION_UNKNOWN.to_string()), detector_base::ARCH_UNKNOWN.to_string())
                 };
 
                 let port = get_postgresql_port(&bin_path).await;
@@ -294,8 +298,8 @@ pub async fn detect_postgresql(app_handle: Option<&AppHandle>) -> Result<Postgre
             let already_added = instances.iter().any(|inst| inst.service_name.as_deref() == Some(service_name));
             if !already_added {
                 instances.push(PostgresqlInstance {
-                    version: extract_major_from_service_name(service_name).unwrap_or_else(|| "未知版本".to_string()),
-                    architecture: "未知".to_string(),
+                    version: extract_major_from_service_name(service_name).unwrap_or_else(|| detector_base::VERSION_UNKNOWN.to_string()),
+                    architecture: detector_base::ARCH_UNKNOWN.to_string(),
                     status,
                     path: String::new(),
                     service_name: Some(service_name.clone()),
@@ -323,14 +327,14 @@ pub async fn detect_postgresql(app_handle: Option<&AppHandle>) -> Result<Postgre
         let result = process_manager::execute_command(exe_to_check.to_str().unwrap_or(""), &["--version"]).await;
         if let Ok(output) = result {
             if output.exit_code == 0 {
-                let version = parse_version(&output.stdout).unwrap_or("未知".to_string());
+                let version = parse_version(&output.stdout).unwrap_or(detector_base::ARCH_UNKNOWN.to_string());
                 let arch = parse_architecture(&output.stdout);
                 let port = get_postgresql_port(&bin_path).await;
                 let data_dir = get_postgresql_data_dir(&bin_path).await;
                 instances.push(PostgresqlInstance {
                     version,
                     architecture: arch,
-                    status: "未安装服务".to_string(),
+                    status: detector_base::STATUS_NO_SERVICE.to_string(),
                     path: bin_path,
                     service_name: None,
                     port,

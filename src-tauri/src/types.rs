@@ -39,7 +39,7 @@ pub struct MySQLInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../src/types/generated/")]
 pub struct MySQLPackageOption {
-    /// 包类型：offline（离线版）/ online（在线版）
+    /// 包类型：msi（安装包）/ zip（压缩包）
     pub package_type: String,
     pub display_name: String,
     pub download_link: String,
@@ -50,6 +50,10 @@ pub struct MySQLPackageOption {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../src/types/generated/")]
 pub struct MySQLVersionInfo {
+    /// 下载模式：installer（一体化管理器）/ server（独立安装包）
+    pub mode: String,
+    /// 所属系列分类（如 "MySQL 9.x"、"MySQL 8.0"）
+    pub category: String,
     pub version: String,
     pub packages: Vec<MySQLPackageOption>,
 }

@@ -2,51 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, watch, computed } from 'vue'
 import { appService } from '../services/appService'
 import { applyCssTokens } from '../theme/tokens'
+import { FALLBACK_TOOLS } from '../data/tools'
 import type { ToolInfo } from '../types'
-
-const FALLBACK_TOOLS: Record<string, ToolInfo> = {
-  mysql: { id: 'mysql', name: 'MySQL', icon: 'database',
-    features: [
-      { id: 'instances', name: '版本检测', icon: 'check-circle' },
-      { id: 'downloads', name: '可用版本', icon: 'download' },
-      { id: 'cleanup', name: '卸载清理', icon: 'trash' },
-      { id: 'password', name: '密码管理', icon: 'key' }
-    ]
-  },
-  postgresql: { id: 'postgresql', name: 'PostgreSQL', icon: 'database',
-    features: [
-      { id: 'instances', name: '版本检测', icon: 'check-circle' },
-      { id: 'downloads', name: '可用版本', icon: 'download' },
-      { id: 'cleanup', name: '卸载清理', icon: 'trash' },
-      { id: 'password', name: '密码管理', icon: 'key' }
-    ]
-  },
-  python: { id: 'python', name: 'Python', icon: 'code',
-    features: [
-      { id: 'instances', name: '版本检测', icon: 'check-circle' },
-      { id: 'downloads', name: '可用版本', icon: 'download' },
-      { id: 'envs', name: '环境列表', icon: 'settings' },
-      { id: 'packages', name: '已安装包', icon: 'box' },
-      { id: 'mirror', name: '镜像源', icon: 'globe' }
-    ]
-  },
-  node: { id: 'node', name: 'Node.js', icon: 'code',
-    features: [
-      { id: 'instances', name: '版本检测', icon: 'check-circle' },
-      { id: 'downloads', name: '可用版本', icon: 'download' },
-      { id: 'envs', name: '环境列表', icon: 'settings' },
-      { id: 'packages', name: '全局包', icon: 'box' },
-      { id: 'mirror', name: '镜像源', icon: 'globe' }
-    ]
-  },
-  jetbrains: { id: 'jetbrains', name: 'JetBrains', icon: 'rocket',
-    features: [
-      { id: 'instances', name: '版本检测', icon: 'check-circle' },
-      { id: 'downloads', name: '可用版本', icon: 'download' },
-      { id: 'cleanup', name: '卸载清理', icon: 'trash' }
-    ]
-  }
-}
 
 /** 预设主题色：只定义主色，hover/light/on-primary 由 tokens.derivePrimary 统一派生 */
 export const PRESET_COLORS = [

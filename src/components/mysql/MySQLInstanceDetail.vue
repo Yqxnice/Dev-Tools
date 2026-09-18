@@ -29,13 +29,21 @@ const operating = computed(() => mysql.operatingInstances.has(opKey.value))
 
 async function startService() {
   if (!inst.value.service_name) return
-  await mysql.startService(inst.value.service_name, currentIndex.value)
-  log.addLog('info', `已请求启动服务: ${inst.value.service_name}`)
+  try {
+    await mysql.startService(inst.value.service_name, currentIndex.value)
+    log.addLog('info', `已请求启动服务: ${inst.value.service_name}`)
+  } catch (e) {
+    log.addLog('error', `启动服务失败: ${e}`)
+  }
 }
 async function stopService() {
   if (!inst.value.service_name) return
-  await mysql.stopService(inst.value.service_name, currentIndex.value)
-  log.addLog('info', `已请求停止服务: ${inst.value.service_name}`)
+  try {
+    await mysql.stopService(inst.value.service_name, currentIndex.value)
+    log.addLog('info', `已请求停止服务: ${inst.value.service_name}`)
+  } catch (e) {
+    log.addLog('error', `停止服务失败: ${e}`)
+  }
 }
 function gotoResidueClear() {
   mysql.selectedResidueInstance = inst.value

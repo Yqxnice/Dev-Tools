@@ -1,21 +1,11 @@
-use super::super::{download_control, logger, types::AvailablePythonVersion};
+use super::super::{download_control, http_client, logger, types::AvailablePythonVersion};
 use regex::Regex;
-use reqwest;
 use tauri::AppHandle;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
-use std::time::Duration;
 
 static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r#"href="(\d+\.\d+\.\d+)/""#).unwrap());
 static STABLE_VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+\.\d+\.\d+$").unwrap());
-
-/// 共享 HTTP 客户端：仅设置连接超时，流式下载不受总超时限制
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
-});
 
 const MIRRORS: &[(&str, &str)] = &[
     ("华为云", "https://mirrors.huaweicloud.com/python/"),
@@ -38,7 +28,7 @@ pub fn validate_version_string(version: &str) -> Result<(), String> {
 }
 
 async fn fetch_versions_from_mirror(mirror_url: &str) -> Result<Vec<String>, String> {
-    let response = HTTP_CLIENT.get(mirror_url)
+    let response = http_client::default_client().get(mirror_url)
         .send()
         .await
         .map_err(|e| format!("请求失败: {}", e))?;
@@ -154,7 +144,7 @@ async fn verify_installer(
 
     // 2. 尝试获取侧车 .sha256 校验文件（部分镜像提供；python.org 官方通常只有 .asc）
     let sidecar_url = format!("{}.sha256", download_url);
-    match HTTP_CLIENT.get(&sidecar_url).send().await {
+    match http_client::default_client().get(&sidecar_url).send().await {
         Ok(resp) if resp.status().is_success() => {
             let body = resp.text().await.unwrap_or_default();
             let expected = body.split_whitespace().next().unwrap_or("").trim().to_lowercase();
@@ -207,7 +197,7 @@ pub async fn download_python(
         &download_url,
         &file_path,
         &version,
-        &HTTP_CLIENT,
+        http_client::default_client(),
         3,
     )
     .await?;

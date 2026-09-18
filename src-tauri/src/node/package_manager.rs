@@ -1,4 +1,4 @@
-use super::super::{logger, process_manager};
+use super::super::{detector_base, logger, process_manager};
 use super::super::types::NodePackage;
 use tauri::AppHandle;
 
@@ -108,7 +108,7 @@ fn parse_npm_ls_json(stdout: &str) -> Result<Vec<NodePackage>, String> {
         let version = info
             .get("version")
             .and_then(|v| v.as_str())
-            .unwrap_or("未知")
+            .unwrap_or(detector_base::ARCH_UNKNOWN)
             .to_string();
         packages.push(NodePackage {
             name: name.clone(),

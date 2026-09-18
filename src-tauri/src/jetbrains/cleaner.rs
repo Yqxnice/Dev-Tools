@@ -1,4 +1,5 @@
 use super::super::{
+    detector_base,
     logger,
     process_manager,
     types::{CleanResult, JetBrainsInstallation, JetBrainsResidueScanResult, ScannedPath},
@@ -42,7 +43,7 @@ fn config_folder_prefix(product_name: &str) -> Option<String> {
 /// 从 DisplayName 中提取版本号（如 "IntelliJ IDEA 2026.2" -> "2026.2"）
 fn extract_version_from_name(name: &str, fallback: &str) -> String {
     // 优先使用 registry DisplayVersion
-    if !fallback.is_empty() && fallback != "未知" {
+    if !fallback.is_empty() && fallback != detector_base::ARCH_UNKNOWN {
         return fallback.to_string();
     }
     // 从产品名末尾提取 x.y 形式的版本

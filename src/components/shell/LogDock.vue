@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
-import { NIcon, NEmpty, NVirtualList } from 'naive-ui'
-import type { VirtualListInst } from 'naive-ui'
+import { NIcon, NEmpty } from 'naive-ui'
 import { DocumentTextOutline, ChevronDownOutline } from '@vicons/ionicons5'
-import { useLoggerStore, type LogEntry } from '../../stores/loggerStore'
+import { useLoggerStore } from '../../stores/loggerStore'
 import { useAppStore } from '../../stores/appStore'
 import { appService } from '../../services/appService'
 
@@ -82,7 +81,7 @@ const logFilters = computed(() => ([
 // 最近一条日志预览（折叠状态条用）
 const latestLog = computed(() => log.logs[log.logs.length - 1] ?? null)
 
-const vlRef = ref<VirtualListInst | null>(null)
+const logScrollRef = ref<HTMLElement | null>(null)
 const stickToBottom = ref(true)
 function onLogScroll(e: Event) {
   const t = e.target as HTMLElement
@@ -91,7 +90,9 @@ function onLogScroll(e: Event) {
 }
 function scrollLogToBottom(force = false) {
   if (force) stickToBottom.value = true
-  vlRef.value?.scrollTo({ position: 'bottom' })
+  if (logScrollRef.value) {
+    logScrollRef.value.scrollTop = logScrollRef.value.scrollHeight
+  }
 }
 watch(() => filteredLogs.value.length, () => {
   if (!stickToBottom.value || logCollapsed.value) return
@@ -176,16 +177,12 @@ async function handleExportLogs() {
       </div>
       <div class="log-body">
         <n-empty v-if="filteredLogs.length === 0" description="暂无日志" size="small" />
-        <div v-else class="log-scroll" @scroll.capture="onLogScroll">
-          <n-virtual-list ref="vlRef" :items="filteredLogs" :item-size="22" :item-key="(item: LogEntry) => item.id" :overscan="8" class="log-vl">
-            <template #default="{ item }">
-              <div class="log-line" :title="item.message">
-                <span v-if="app.settings.showLogTimestamps" class="log-time">[{{ item.timestamp }}]</span>
-                <span :class="['log-level', `log-${item.type}`]">[{{ item.type.toUpperCase() }}]</span>
-                <span class="log-message">{{ item.message }}</span>
-              </div>
-            </template>
-          </n-virtual-list>
+        <div v-else ref="logScrollRef" class="log-scroll" @scroll.capture="onLogScroll">
+          <div v-for="item in filteredLogs" :key="item.id" class="log-line" :title="item.message">
+            <span v-if="app.settings.showLogTimestamps" class="log-time">[{{ item.timestamp }}]</span>
+            <span :class="['log-level', `log-${item.type}`]">[{{ item.type.toUpperCase() }}]</span>
+            <span class="log-message">{{ item.message }}</span>
+          </div>
         </div>
         <button v-if="!stickToBottom" class="log-jump" @click="scrollLogToBottom(true)">
           回到底部 <n-icon :component="ChevronDownOutline" />
@@ -315,12 +312,11 @@ async function handleExportLogs() {
   flex: 1; min-height: 0; position: relative;
   display: flex; flex-direction: column; padding: 6px 0;
 }
-.log-scroll { flex: 1; min-height: 0; }
-.log-vl { height: 100%; }
+.log-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .log-line {
-  height: 22px; line-height: 22px;
+  min-height: 22px; line-height: 22px;
   display: flex; gap: 8px; padding: 0 16px;
-  white-space: nowrap; overflow: hidden;
+  align-items: flex-start;
   font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace);
   font-size: 12px;
 }
@@ -330,7 +326,12 @@ async function handleExportLogs() {
 .log-success { color: var(--color-success); }
 .log-warn { color: var(--color-warning); }
 .log-error { color: var(--color-danger); }
-.log-message { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; }
+.log-message {
+  color: var(--text-secondary);
+  flex: 1; min-width: 0;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
 .log-jump {
   position: absolute; right: 16px; bottom: 10px;
   display: inline-flex; align-items: center; gap: 4px;

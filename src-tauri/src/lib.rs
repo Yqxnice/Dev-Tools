@@ -8,6 +8,7 @@ pub mod logger;
 pub mod process_manager;
 pub mod service_manager;
 pub mod detector_base;
+pub mod http_client;
 pub mod plugin;
 pub mod mysql;
 pub mod postgresql;
@@ -15,6 +16,7 @@ pub mod python;
 pub mod node;
 pub mod jetbrains;
 pub mod java;
+pub mod software;
 pub mod download_control;
 
 use plugin::PluginManager;
@@ -54,8 +56,8 @@ fn relaunch_as_admin() -> Result<(), String> {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOW;
-        let exe_w = to_wide(&exe);
-        let verb_w = to_wide("runas");
+        let exe_w = service_manager::to_wide(&exe);
+        let verb_w = service_manager::to_wide("runas");
         let result = ShellExecuteW(
             HWND(std::ptr::null_mut()),
             PCWSTR(verb_w.as_ptr()),
@@ -76,11 +78,6 @@ fn relaunch_as_admin() -> Result<(), String> {
         let _ = exe;
         Err("仅支持 Windows 平台".to_string())
     }
-}
-
-/// 将 &str 转为以 null 结尾的 UTF-16 宽字符序列
-fn to_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// 将前端日志面板内容导出为文件，保存到「下载/DevTools/logs」，返回完整路径
@@ -227,6 +224,7 @@ pub fn run() {
     plugin_mgr.register(Box::new(node::NodePlugin));
     plugin_mgr.register(Box::new(jetbrains::JetBrainsPlugin));
     plugin_mgr.register(Box::new(java::JavaPlugin));
+    plugin_mgr.register(Box::new(software::SoftwarePlugin));
 
     // 构建命令路由表：命令名 -> handler 索引（O(1) 查找）
     let (mut route, mut handlers) = plugin_mgr.build_router();

@@ -11,6 +11,7 @@ import { useJetBrainsStore } from '../stores/jetbrainsStore'
 import { usePostgresqlStore } from '../stores/postgresqlStore'
 import { useAppStore } from '../stores/appStore'
 import { appService } from '../services/appService'
+import { prefetchSoftwareIcons } from './useSoftwareIcons'
 
 export function useAppInit() {
   const log = useLoggerStore()
@@ -39,6 +40,8 @@ export function useAppInit() {
     log.clearLogs()
     addLog('info', '========== 应用初始化 ==========')
     addLog('info', app.isAdmin ? '当前以管理员权限运行，全部功能可用' : '当前为普通用户权限，危险操作不可用')
+    // 软件图标后台预取（不 await：第三方探测+后端解析不阻塞初始化与主功能）
+    prefetchSoftwareIcons()
     await app.loadTools()
     try {
       unlistenLog = await appService.setupLogListener((event) => {

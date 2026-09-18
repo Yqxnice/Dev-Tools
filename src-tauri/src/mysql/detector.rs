@@ -228,11 +228,15 @@ pub async fn find_all_mysql_services(_app_handle: Option<&AppHandle>) -> Vec<Str
 }
 
 pub async fn start_mysql_service(app_handle: AppHandle, service_name: String) -> Result<(), String> {
-    service_manager::start_service(&app_handle, "MySQL", &service_name).await
+    service_manager::start_service(&app_handle, "MySQL", &service_name)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn stop_mysql_service(app_handle: AppHandle, service_name: String) -> Result<(), String> {
-    service_manager::stop_service(&app_handle, "MySQL", &service_name).await
+    service_manager::stop_service(&app_handle, "MySQL", &service_name)
+        .await
+        .map_err(Into::into)
 }
 
 pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> Result<MySQLInfo, String> {
@@ -273,7 +277,7 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> Result<MySQLInf
                 
                 if let Ok(output) = result {
                     if output.exit_code == 0 {
-                        let version = parse_version(&output.stdout).unwrap_or("未知".to_string());
+                        let version = parse_version(&output.stdout).unwrap_or(detector_base::ARCH_UNKNOWN.to_string());
                         let arch = parse_architecture(&output.stdout);
                         let port = get_mysql_port(&bin_path, Some(service_name)).await;
                         
@@ -294,8 +298,8 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> Result<MySQLInf
                 .any(|inst| inst.service_name.as_deref() == Some(service_name));
             if !already_added {
                 instances.push(MySQLInstance {
-                    version: "未知版本".to_string(),
-                    architecture: "未知".to_string(),
+                    version: detector_base::VERSION_UNKNOWN.to_string(),
+                    architecture: detector_base::ARCH_UNKNOWN.to_string(),
                     status,
                     path: String::new(),
                     service_name: Some(service_name.clone()),
@@ -344,14 +348,14 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> Result<MySQLInf
         
         if let Ok(output) = result {
             if output.exit_code == 0 {
-                let version = parse_version(&output.stdout).unwrap_or("未知".to_string());
+                let version = parse_version(&output.stdout).unwrap_or(detector_base::ARCH_UNKNOWN.to_string());
                 let arch = parse_architecture(&output.stdout);
                 let port = get_mysql_port(&bin_path, None).await;
                 
                 instances.push(MySQLInstance {
                     version,
                     architecture: arch,
-                    status: "未安装服务".to_string(),
+                    status: detector_base::STATUS_NO_SERVICE.to_string(),
                     path: bin_path,
                     service_name: None,
                     port,
@@ -400,7 +404,7 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> Result<MySQLInf
                                                     
                                                     for service in &common_service_names {
                                                         let status = service_manager::check_service_status(service).await;
-                                                        if status != "未安装" {
+                                                        if status != detector_base::STATUS_NOT_INSTALLED {
                                                             found_service = Some(service.to_string());
                                                             let port = get_mysql_port(bin_path.to_str().unwrap_or(""), Some(service)).await;
                                                             instances.push(MySQLInstance {
@@ -421,7 +425,7 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> Result<MySQLInf
                                                         instances.push(MySQLInstance {
                                                             version,
                                                             architecture: arch,
-                                                            status: "未安装服务".to_string(),
+                                                            status: detector_base::STATUS_NO_SERVICE.to_string(),
                                                             path: bin_path.to_str().unwrap_or("").to_string(),
                                                             service_name: None,
                                                             port,
@@ -443,12 +447,12 @@ pub async fn detect_all_mysql(app_handle: Option<&AppHandle>) -> Result<MySQLInf
 
         for service in &common_service_names {
             let status = service_manager::check_service_status(service).await;
-            if status != "未安装" {
+            if status != detector_base::STATUS_NOT_INSTALLED {
                 let exists = instances.iter().any(|inst| inst.service_name.as_deref() == Some(service));
                 if !exists {
                     instances.push(MySQLInstance {
-                        version: "未知版本".to_string(),
-                        architecture: "未知".to_string(),
+                        version: detector_base::VERSION_UNKNOWN.to_string(),
+                        architecture: detector_base::ARCH_UNKNOWN.to_string(),
                         status,
                         path: String::new(),
                         service_name: Some(service.to_string()),
@@ -555,7 +559,7 @@ port=not-a-number
             MySQLInstance {
                 version: "8.0.36".to_string(),
                 architecture: "x86_64".to_string(),
-                status: "启动".to_string(),
+                status: detector_base::STATUS_RUNNING.to_string(),
                 path: r"C:\mysql\bin".to_string(),
                 service_name: Some("MySQL80".to_string()),
                 port: None,
@@ -564,7 +568,7 @@ port=not-a-number
             MySQLInstance {
                 version: "8.0.36".to_string(),
                 architecture: "x86_64".to_string(),
-                status: "启动".to_string(),
+                status: detector_base::STATUS_RUNNING.to_string(),
                 path: r"C:\mysql\bin".to_string(),
                 service_name: Some("MySQL80".to_string()),
                 port: Some(3306),
@@ -582,7 +586,7 @@ port=not-a-number
             MySQLInstance {
                 version: "8.0.36".to_string(),
                 architecture: "x86_64".to_string(),
-                status: "启动".to_string(),
+                status: detector_base::STATUS_RUNNING.to_string(),
                 path: r"C:\mysql8\bin".to_string(),
                 service_name: Some("MySQL80".to_string()),
                 port: Some(3306),
@@ -591,7 +595,7 @@ port=not-a-number
             MySQLInstance {
                 version: "5.7.44".to_string(),
                 architecture: "x86_64".to_string(),
-                status: "停止".to_string(),
+                status: detector_base::STATUS_STOPPED.to_string(),
                 path: r"C:\mysql57\bin".to_string(),
                 service_name: Some("MySQL57".to_string()),
                 port: Some(3307),
@@ -605,9 +609,9 @@ port=not-a-number
     #[test]
     fn merge_instance_updates_missing_fields() {
         let mut existing = MySQLInstance {
-            version: "未知版本".to_string(),
-            architecture: "未知".to_string(),
-            status: "未安装".to_string(),
+            version: detector_base::VERSION_UNKNOWN.to_string(),
+            architecture: detector_base::ARCH_UNKNOWN.to_string(),
+            status: detector_base::STATUS_NOT_INSTALLED.to_string(),
             path: String::new(),
             service_name: None,
             port: None,
@@ -616,7 +620,7 @@ port=not-a-number
         let incoming = MySQLInstance {
             version: "8.0.36".to_string(),
             architecture: "x86_64".to_string(),
-            status: "启动".to_string(),
+            status: detector_base::STATUS_RUNNING.to_string(),
             path: r"C:\mysql\bin".to_string(),
             service_name: Some("MySQL80".to_string()),
             port: Some(3306),
@@ -625,7 +629,7 @@ port=not-a-number
         crate::detector_base::merge_instance(&mut existing, incoming);
         assert_eq!(existing.version, "8.0.36");
         assert_eq!(existing.architecture, "x86_64");
-        assert_eq!(existing.status, "启动");
+        assert_eq!(existing.status, detector_base::STATUS_RUNNING);
         assert_eq!(existing.path, r"C:\mysql\bin");
         assert_eq!(existing.service_name, Some("MySQL80".to_string()));
         assert_eq!(existing.port, Some(3306));

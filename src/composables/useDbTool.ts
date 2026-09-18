@@ -217,27 +217,38 @@ export function useDbTool<TInstance extends DbInstanceLike, TInfo extends DbInfo
   async function startService(serviceName: string, index: number): Promise<void> {
     const key = `${index}-${serviceName}`
     operatingInstances.value = new Set(operatingInstances.value).add(key)
+    let opError: unknown = null
     try {
       await service.startService(serviceName)
-      await detect()
+    } catch (e) {
+      opError = e
     } finally {
+      // 无论操作成功与否都清除操作标记
       const next = new Set(operatingInstances.value)
       next.delete(key)
       operatingInstances.value = next
     }
+    // 无论操作成功与否都刷新检测，让 UI 反映真实服务状态
+    // （StartServiceW 可能耗时数秒甚至超时返回错误，此时 detect 仍需刷新）
+    await detect()
+    if (opError) throw opError
   }
 
   async function stopService(serviceName: string, index: number): Promise<void> {
     const key = `${index}-${serviceName}`
     operatingInstances.value = new Set(operatingInstances.value).add(key)
+    let opError: unknown = null
     try {
       await service.stopService(serviceName)
-      await detect()
+    } catch (e) {
+      opError = e
     } finally {
       const next = new Set(operatingInstances.value)
       next.delete(key)
       operatingInstances.value = next
     }
+    await detect()
+    if (opError) throw opError
   }
 
   function buildCleanOptionsPayload(): CleanOptions {

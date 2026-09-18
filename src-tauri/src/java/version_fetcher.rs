@@ -1,19 +1,10 @@
-use super::super::{logger, types::AvailableJavaVersion};
+use super::super::{http_client, logger, types::AvailableJavaVersion};
 use once_cell::sync::Lazy;
 use regex::Regex;
-use reqwest;
 use tauri::AppHandle;
-use std::time::Duration;
 
 /// 校验 feature version（数字字符串）
 static FEATURE_VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+$").unwrap());
-
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
-});
 
 /// Adoptium API 基址
 const API_BASE: &str = "https://api.adoptium.net";
@@ -29,7 +20,7 @@ pub async fn get_available_java_versions(
 
     // 第一步：拉 release 列表
     let releases_url = format!("{}/v3/info/available_releases", API_BASE);
-    let releases_body = HTTP_CLIENT
+    let releases_body = http_client::default_client()
         .get(&releases_url)
         .send()
         .await
@@ -96,7 +87,7 @@ async fn fetch_feature_release_detail(feature_version: u32) -> Result<(String, S
         API_BASE, feature_version
     );
 
-    let body = HTTP_CLIENT
+    let body = http_client::default_client()
         .get(&url)
         .send()
         .await

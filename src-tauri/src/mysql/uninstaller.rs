@@ -1,5 +1,5 @@
 use super::detector;
-use super::super::{logger, process_manager, service_manager};
+use super::super::{detector_base, logger, process_manager, service_manager};
 use std::collections::HashMap;
 use tauri::AppHandle;
 
@@ -64,7 +64,7 @@ fn build_uninstall_filter(bin_dir: &str, version: &str) -> Option<String> {
 
 /// 解析实例版本：优先使用传入版本，未知时尝试执行 mysql --version
 async fn resolve_instance_version(bin_dir: &str, known_version: &str) -> String {
-    if !known_version.is_empty() && known_version != "未知版本" && known_version != "未知" {
+    if !known_version.is_empty() && known_version != detector_base::VERSION_UNKNOWN && known_version != detector_base::ARCH_UNKNOWN {
         return known_version.to_string();
     }
     let mysql_exe = std::path::Path::new(bin_dir).join("mysql.exe");

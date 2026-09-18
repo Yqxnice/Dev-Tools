@@ -1,5 +1,5 @@
 use super::detector;
-use super::super::{logger, process_manager, service_manager};
+use super::super::{detector_base, logger, process_manager, service_manager};
 use std::collections::HashMap;
 use tauri::AppHandle;
 
@@ -27,7 +27,7 @@ pub async fn remove_postgresql_services(app_handle: &AppHandle, services: Vec<St
 /// 为 PostgreSQL 实例构建卸载过滤正则
 /// PostgreSQL 的 DisplayName 形如 "PostgreSQL 16" 或 "PostgreSQL 16 (x64)"
 fn build_uninstall_filter(version: &str) -> Option<String> {
-    if version.is_empty() || version == "未知版本" || version == "未知" {
+    if version.is_empty() || version == detector_base::VERSION_UNKNOWN || version == detector_base::ARCH_UNKNOWN {
         return None;
     }
     // 提取主版本号
@@ -140,7 +140,7 @@ pub async fn uninstall_selected_postgresql(
         let (_bin_dir, version) = match bin_dir {
             Some(dir) => {
                 // 如果版本未知，从服务名提取主版本号
-                let v = if known_version.is_empty() || known_version == "未知版本" || known_version == "未知" {
+                let v = if known_version.is_empty() || known_version == detector_base::VERSION_UNKNOWN || known_version == detector_base::ARCH_UNKNOWN {
                     crate::service_manager::get_service_binary_path(service).await
                         .and_then(|_| {
                             // 尝试从服务名提取：postgresql-x64-16 → "16"

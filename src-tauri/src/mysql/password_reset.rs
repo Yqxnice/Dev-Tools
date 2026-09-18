@@ -1,4 +1,4 @@
-use super::super::{logger, process_manager, types};
+use super::super::{detector_base, logger, process_manager, types};
 use super::detector;
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -72,9 +72,9 @@ async fn wait_for_service_state(
     loop {
         let status = crate::service_manager::check_service_status(service_name).await;
         let reached = if running {
-            status == "启动"
+            status == detector_base::STATUS_RUNNING
         } else {
-            status != "启动"
+            status != detector_base::STATUS_RUNNING
         };
         if reached {
             return true;
@@ -194,6 +194,26 @@ pub fn validate_password_strength(password: &str) -> Result<(), String> {
         .map_err(|e| e.to_user_message())
 }
 
+/// 判断 MySQL 版本是否为 8.0 及以上（包括 9.0+ Innovation 系列）。
+/// MySQL 8.0 起移除了 PASSWORD() 函数，9.0+ 同样不支持，必须用 ALTER USER。
+fn is_mysql_8_or_higher(version: &str) -> bool {
+    version
+        .split('.')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map_or(false, |m| m >= 8)
+}
+
+/// 判断 MySQL 版本是否为 9.0 及以上。
+/// MySQL 9.0 彻底移除了 mysql_native_password 插件，只能使用 caching_sha2_password。
+fn is_mysql_9_or_higher(version: &str) -> bool {
+    version
+        .split('.')
+        .next()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map_or(false, |m| m >= 9)
+}
+
 fn resolve_port(instance: &types::MySQLInstance, override_port: Option<u16>) -> Option<u16> {
     override_port.or(instance.port)
 }
@@ -201,7 +221,20 @@ fn resolve_port(instance: &types::MySQLInstance, override_port: Option<u16>) -> 
 pub fn build_password_reset_sql(version: &str, new_password: &str) -> String {
     let escaped_password = escape_mysql_password(new_password);
 
-    if version.starts_with("8.") {
+    if is_mysql_9_or_higher(version) {
+        // MySQL 9.0+: mysql_native_password 插件已彻底移除，必须使用 caching_sha2_password
+        [
+            "UPDATE mysql.user SET authentication_string='', plugin='caching_sha2_password' WHERE User='root';"
+                .to_string(),
+            "SELECT ROW_COUNT() AS affected_rows;".to_string(),
+            "FLUSH PRIVILEGES;".to_string(),
+            format!("ALTER USER 'root'@'localhost' IDENTIFIED BY '{}';", escaped_password),
+            format!("ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '{}';", escaped_password),
+            format!("ALTER USER 'root'@'%' IDENTIFIED BY '{}';", escaped_password),
+        ]
+        .join(" ")
+    } else if is_mysql_8_or_higher(version) {
+        // MySQL 8.0-8.x: mysql_native_password 仍可用（已弃用），保持兼容
         [
             "UPDATE mysql.user SET authentication_string='', plugin='mysql_native_password' WHERE User='root';"
                 .to_string(),
@@ -247,8 +280,8 @@ pub fn build_password_reset_sql(version: &str, new_password: &str) -> String {
 /// 构建容错版修改密码SQL - 逐个尝试修改，失败不影响后续
 pub fn build_safe_change_password_sql(version: &str, new_password: &str) -> String {
     let escaped = escape_mysql_password(new_password);
-    
-    if version.starts_with("8.") {
+
+    if is_mysql_8_or_higher(version) {
         // MySQL 8.0: 不再使用已弃用的 PASSWORD() 函数
         // 先查询用户，再动态生成 ALTER USER 语句
         format!(
@@ -291,8 +324,8 @@ pub fn build_safe_change_password_sql(version: &str, new_password: &str) -> Stri
 pub fn build_simple_alter_sql(version: &str, new_password: &str, host: &str) -> Result<String, String> {
     validate_mysql_host(host)?;
     let escaped = escape_mysql_password(new_password);
-    
-    if version.starts_with("8.") {
+
+    if is_mysql_8_or_higher(version) {
         Ok(format!(
             "ALTER USER 'root'@'{}' IDENTIFIED BY '{}'; FLUSH PRIVILEGES;",
             host, escaped
@@ -588,7 +621,9 @@ pub async fn reset_mysql_password(
         }
     }
     
-    if version.starts_with("8.") {
+    if is_mysql_9_or_higher(version) {
+        logger::info(&app_handle, "检测到 MySQL 9.0+，mysql_native_password 已移除，使用 caching_sha2_password + ALTER USER 方式...");
+    } else if is_mysql_8_or_higher(version) {
         logger::info(&app_handle, "检测到 MySQL 8.0+，使用清空认证信息后 ALTER USER 方式...");
     } else if version.starts_with("5.7") {
         logger::info(&app_handle, "检测到 MySQL 5.7，使用 5.7 专用重置方式...");
@@ -627,7 +662,7 @@ pub async fn reset_mysql_password(
                 let affected_rows = parse_affected_rows(&output.stdout);
                 if let Some(count) = affected_rows {
                     logger::info(&app_handle, &format!("密码更新影响行数: {}", count));
-                    if count > 0 || version.starts_with("8.") {
+                    if count > 0 || is_mysql_8_or_higher(version) {
                         sql_success = true;
                         logger::info(&app_handle, "SQL 执行成功！");
                     } else {
@@ -636,11 +671,11 @@ pub async fn reset_mysql_password(
                 } else {
                     // MySQL 8.x 的 ALTER USER 不输出 ROW_COUNT，无法据此判断，保持宽松成功；
                     // 5.6/5.7 路径含 SELECT ROW_COUNT()，输出异常意味着实际失败，不应误判成功
-                    if version.starts_with("8.") {
-                        logger::warn(&app_handle, "无法解析受影响行数（MySQL 8.x ALTER USER 不输出行数），保持宽松判断");
+                    if is_mysql_8_or_higher(version) {
+                        logger::warn(&app_handle, "无法解析受影响行数（MySQL 8.x+ ALTER USER 不输出行数），保持宽松判断");
                         sql_success = true;
                     } else {
-                        logger::error(&app_handle, "无法解析受影响行数，且非 MySQL 8.x，判定重置失败");
+                        logger::error(&app_handle, "无法解析受影响行数，且非 MySQL 8.x+，判定重置失败");
                     }
                 }
             }
@@ -662,7 +697,7 @@ pub async fn reset_mysql_password(
     if sql_success {
         logger::info(&app_handle, "正在无授权模式下验证密码设置...");
         // 对于老版本检查password字段，对于5.7+检查authentication_string
-        let verify_sql = if version.starts_with("5.7") || version.starts_with("8.") {
+        let verify_sql = if version.starts_with("5.7") || is_mysql_8_or_higher(version) {
             "SELECT User, Host, LEFT(authentication_string, 10) AS pass_prefix FROM mysql.user WHERE User='root';"
         } else {
             "SELECT User, Host, LEFT(Password, 10) AS pass_prefix FROM mysql.user WHERE User='root';"
@@ -894,9 +929,9 @@ pub async fn change_mysql_password(
             logger::warn(&app_handle, &format!("简单方案失败: {}", output.stderr));
             logger::info(&app_handle, "尝试备用方案...");
             
-            // 备用方案：尝试使用动态生成的 SQL（MySQL 8.0+）
-            if version.starts_with("8.") {
-                logger::info(&app_handle, "尝试 MySQL 8.0+ 的动态 SQL 方案...");
+            // 备用方案：尝试使用动态生成的 SQL（MySQL 8.0+，含 9.0+）
+            if is_mysql_8_or_higher(version) {
+                logger::info(&app_handle, "尝试 MySQL 8.0+（含 9.0+）的动态 SQL 方案...");
                 let fallback_sql = build_safe_change_password_sql(version, &new_password);
                 let masked_fallback_sql = fallback_sql.replace(&escape_mysql_password(&new_password), "***");
                 logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_fallback_sql));
@@ -1035,5 +1070,60 @@ mod tests {
     fn build_password_reset_sql_escapes_special_chars() {
         let sql = build_password_reset_sql("8.0.36", "pass'with\"special");
         assert!(sql.contains("pass''with\\\"special"));
+    }
+
+    #[test]
+    fn is_mysql_8_or_higher_detects_version_correctly() {
+        assert!(is_mysql_8_or_higher("8.0.36"));
+        assert!(is_mysql_8_or_higher("8.4.0"));
+        assert!(is_mysql_8_or_higher("9.0.0"));
+        assert!(is_mysql_8_or_higher("9.1.2"));
+        assert!(!is_mysql_8_or_higher("5.7.44"));
+        assert!(!is_mysql_8_or_higher("5.6.51"));
+        assert!(!is_mysql_8_or_higher("unknown"));
+    }
+
+    #[test]
+    fn is_mysql_9_or_higher_detects_version_correctly() {
+        assert!(!is_mysql_9_or_higher("8.0.36"));
+        assert!(!is_mysql_9_or_higher("8.4.0"));
+        assert!(is_mysql_9_or_higher("9.0.0"));
+        assert!(is_mysql_9_or_higher("9.1.2"));
+        assert!(is_mysql_9_or_higher("9.5.0"));
+        assert!(!is_mysql_9_or_higher("5.7.44"));
+        assert!(!is_mysql_9_or_higher("unknown"));
+    }
+
+    #[test]
+    fn build_password_reset_sql_for_mysql9_uses_caching_sha2() {
+        let sql = build_password_reset_sql("9.0.1", "newpass");
+        assert!(sql.contains("ALTER USER"));
+        assert!(sql.contains("caching_sha2_password"));
+        assert!(sql.contains("newpass"));
+        // 9.0+ must NOT use mysql_native_password or PASSWORD() function
+        assert!(!sql.contains("mysql_native_password"));
+        assert!(!sql.contains("PASSWORD("));
+    }
+
+    #[test]
+    fn build_password_reset_sql_for_mysql8_uses_native_password() {
+        let sql = build_password_reset_sql("8.0.36", "newpass");
+        assert!(sql.contains("ALTER USER"));
+        assert!(sql.contains("mysql_native_password"));
+        assert!(sql.contains("newpass"));
+    }
+
+    #[test]
+    fn build_safe_change_password_sql_for_mysql9_uses_alter_user() {
+        let sql = build_safe_change_password_sql("9.1.0", "secret");
+        assert!(sql.contains("ALTER USER"));
+        assert!(!sql.contains("PASSWORD("));
+    }
+
+    #[test]
+    fn build_simple_alter_sql_for_mysql9_uses_alter_user() {
+        let sql = build_simple_alter_sql("9.0.0", "secret", "localhost").unwrap();
+        assert!(sql.contains("ALTER USER 'root'@'localhost' IDENTIFIED BY"));
+        assert!(!sql.contains("PASSWORD("));
     }
 }

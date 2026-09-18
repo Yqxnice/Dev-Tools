@@ -1,4 +1,4 @@
-use super::super::{logger, process_manager, types};
+use super::super::{detector_base, logger, process_manager, types};
 use super::detector;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
@@ -23,7 +23,7 @@ async fn wait_for_service_state(
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     loop {
         let status = crate::service_manager::check_service_status(service_name).await;
-        let reached = if running { status == "启动" } else { status != "启动" };
+        let reached = if running { status == detector_base::STATUS_RUNNING } else { status != detector_base::STATUS_RUNNING };
         if reached { return true; }
         if tokio::time::Instant::now() >= deadline {
             logger::warn(app_handle, &format!("等待服务 {} 状态超时（当前: {}）", service_name, status));

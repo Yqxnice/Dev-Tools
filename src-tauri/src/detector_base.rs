@@ -14,6 +14,14 @@ use crate::{logger, service_manager};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
+// ── 实例状态/字段常量：集中管理，避免魔法字符串拼写不一致 ──
+pub const STATUS_NOT_INSTALLED: &str = "未安装";
+pub const STATUS_NO_SERVICE: &str = "未安装服务";
+pub const STATUS_RUNNING: &str = "启动";
+pub const STATUS_STOPPED: &str = "停止";
+pub const VERSION_UNKNOWN: &str = "未知版本";
+pub const ARCH_UNKNOWN: &str = "未知";
+
 /// 运行时实例（可执行文件型工具）通用字段访问接口
 ///
 /// 与 `DbInstance` 区别：无 `service_name` / `port` / `is_residual` 字段，
@@ -113,16 +121,16 @@ pub fn merge_instance<T: DbInstance>(existing: &mut T, incoming: T) {
         existing.set_path(incoming.get_path().to_string());
     }
     if (existing.get_version().is_empty()
-        || existing.get_version() == "未知版本"
-        || existing.get_version() == "未知")
+        || existing.get_version() == VERSION_UNKNOWN
+        || existing.get_version() == ARCH_UNKNOWN)
         && !incoming.get_version().is_empty()
-        && incoming.get_version() != "未知版本"
+        && incoming.get_version() != VERSION_UNKNOWN
     {
         existing.set_version(incoming.get_version().to_string());
     }
-    if (existing.get_architecture().is_empty() || existing.get_architecture() == "未知")
+    if (existing.get_architecture().is_empty() || existing.get_architecture() == ARCH_UNKNOWN)
         && !incoming.get_architecture().is_empty()
-        && incoming.get_architecture() != "未知"
+        && incoming.get_architecture() != ARCH_UNKNOWN
     {
         existing.set_architecture(incoming.get_architecture().to_string());
     }
@@ -132,8 +140,8 @@ pub fn merge_instance<T: DbInstance>(existing: &mut T, incoming: T) {
     if existing.get_service_name().is_none() {
         existing.set_service_name(incoming.get_service_name().map(|s| s.to_string()));
     }
-    if (existing.get_status() == "未安装" || existing.get_status() == "未安装服务")
-        && incoming.get_status() != "未安装"
+    if (existing.get_status() == STATUS_NOT_INSTALLED || existing.get_status() == STATUS_NO_SERVICE)
+        && incoming.get_status() != STATUS_NOT_INSTALLED
     {
         existing.set_status(incoming.get_status().to_string());
     }
@@ -143,7 +151,7 @@ pub fn merge_instance<T: DbInstance>(existing: &mut T, incoming: T) {
 pub fn dedupe_instances<T: DbInstance>(mut instances: Vec<T>) -> Vec<T> {
     let mut result: Vec<T> = Vec::new();
     for inst in instances.drain(..) {
-        if inst.get_status() == "未安装"
+        if inst.get_status() == STATUS_NOT_INSTALLED
             && inst.get_path().is_empty()
             && inst.get_service_name().is_none()
         {

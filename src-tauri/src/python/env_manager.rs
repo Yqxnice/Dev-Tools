@@ -1,4 +1,4 @@
-use super::super::logger;
+use super::super::{detector_base, logger};
 use super::super::types::PythonEnvironment;
 use super::detector;
 use std::path::Path;
@@ -8,7 +8,7 @@ async fn get_python_version_from_path(python_path: &str) -> String {
     if let Some(ver) = detector::check_python_at_path(python_path).await {
         ver.version
     } else {
-        "未知".to_string()
+        detector_base::ARCH_UNKNOWN.to_string()
     }
 }
 

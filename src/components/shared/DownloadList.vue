@@ -1,4 +1,5 @@
 <script setup lang="ts" generic="TVersion">
+import { computed } from 'vue'
 import { NButton, NTag, NEmpty } from 'naive-ui'
 import DownloadProgressCard from '../common/DownloadProgressCard.vue'
 import type { DownloadProgress } from '../../types'
@@ -31,11 +32,26 @@ const props = withDefaults(defineProps<{
   hasOngoingTask?: boolean
   emptyText?: string
   countSuffix?: string
+  /** 分组字段名（如 "category"）。设置后按该字段分组并在组间渲染 #group-header 插槽 */
+  groupKey?: string
 }>(), {
   emptyText: '点击「刷新列表」获取可用版本',
   countSuffix: '个版本',
   downloadedPath: '',
   hasOngoingTask: false,
+  groupKey: '',
+})
+
+/** 计算分组：groupKey 为空时返回单组（null key），否则按字段值分组保持顺序 */
+const groups = computed(() => {
+  if (!props.groupKey) return [{ key: '', items: props.versions }]
+  const map = new Map<string, TVersion[]>()
+  for (const v of props.versions) {
+    const k = String((v as Record<string, unknown>)[props.groupKey] ?? '')
+    if (!map.has(k)) map.set(k, [])
+    map.get(k)!.push(v)
+  }
+  return Array.from(map, ([key, items]) => ({ key, items }))
 })
 
 const emit = defineEmits<{
@@ -78,9 +94,14 @@ const emit = defineEmits<{
         <n-tag type="info" size="small">{{ versions.length }} {{ countSuffix }}</n-tag>
       </div>
       <div class="instance-list">
-        <div v-for="(v, index) in versions" :key="index" class="version-row">
-          <slot name="row" :item="v" :index="index" />
-        </div>
+        <template v-for="(grp, gi) in groups" :key="gi">
+          <div v-if="groupKey && grp.key" class="group-header">
+            <slot name="group-header" :group-key="grp.key" />
+          </div>
+          <div v-for="(v, index) in grp.items" :key="`${gi}-${index}`" class="version-row">
+            <slot name="row" :item="v" :index="index" />
+          </div>
+        </template>
       </div>
     </div>
     <n-empty v-else :description="emptyText" />

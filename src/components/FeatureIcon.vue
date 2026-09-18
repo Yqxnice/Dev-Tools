@@ -13,7 +13,8 @@ import {
   SettingsOutline,
   CubeOutline,
   GlobeOutline,
-  RocketOutline
+  RocketOutline,
+  AppsOutline
 } from '@vicons/ionicons5'
 
 const props = defineProps<{ name: string }>()
@@ -31,7 +32,8 @@ const ICON_MAP: Record<string, Component> = {
   settings: SettingsOutline,
   box: CubeOutline,
   globe: GlobeOutline,
-  rocket: RocketOutline
+  rocket: RocketOutline,
+  apps: AppsOutline
 }
 
 const icon = computed(() => ICON_MAP[props.name] ?? CubeOutline)
