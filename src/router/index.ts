@@ -38,6 +38,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../components/Settings.vue'),
     meta: { title: '设置' },
   },
+  {
+    path: '/about',
+    name: 'about',
+    component: () => import('../components/About.vue'),
+    meta: { title: '关于' },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/mysql/instances' },
 ]
 

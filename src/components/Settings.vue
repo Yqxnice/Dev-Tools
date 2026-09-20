@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
-import { NSwitch, NButton, NText, NTag, NInput, NAlert, NInputNumber, NModal, NIcon } from 'naive-ui'
+import { NSwitch, NButton, NInput, NAlert, NInputNumber, NModal, NIcon } from 'naive-ui'
 import {
   ColorPaletteOutline, DownloadOutline, DocumentTextOutline,
-  SettingsOutline, InformationCircleOutline, CheckmarkOutline
+  SettingsOutline, CheckmarkOutline
 } from '@vicons/ionicons5'
 import { useAppStore, PRESET_COLORS } from '../stores/appStore'
 import { appService } from '../services/appService'
@@ -54,7 +54,7 @@ function confirmResetAll() {
 
 function doResetAll() {
   resetConfirmVisible.value = false
-  // 恢复所有设置为默认值（主题由系统 prefers-color-scheme 决定，不重置）
+  // 恢复所有设置为默认值（深/浅色明暗偏好独立持久化，不在此重置）
   localStorage.removeItem('devtools-settings')
   Object.assign(app.settings, {
     themeColor: 'blue',
@@ -83,13 +83,6 @@ function doResetAll() {
       <!-- 外观 -->
       <section class="settings-card">
         <h3 class="section-title"><n-icon :component="ColorPaletteOutline" /><span>外观</span></h3>
-        <div class="setting-item">
-          <div class="setting-info">
-            <span class="setting-label">主题</span>
-            <span class="setting-desc">跟随系统 prefers-color-scheme 自动切换明暗</span>
-          </div>
-          <n-tag size="small" :type="app.isDarkMode ? 'info' : 'success'">{{ app.isDarkMode ? '深色' : '浅色' }}</n-tag>
-        </div>
 
         <div class="setting-item setting-item-block">
           <div class="setting-info setting-info-full">
@@ -204,36 +197,8 @@ function doResetAll() {
             </n-alert>
           </div>
         </div>
-      </section>
 
-      <!-- 关于 -->
-      <section class="settings-card">
-        <h3 class="section-title"><n-icon :component="InformationCircleOutline" /><span>关于</span></h3>
-        <div class="about-grid">
-          <div class="about-row">
-            <span class="about-key">版本</span>
-            <n-text depth="3">0.1.0</n-text>
-          </div>
-          <div class="about-row">
-            <span class="about-key">权限状态</span>
-            <n-tag :type="app.isAdmin ? 'success' : 'warning'" size="small">
-              {{ app.isAdmin ? '管理员模式' : '普通用户' }}
-            </n-tag>
-          </div>
-          <div class="about-row">
-            <span class="about-key">主色调</span>
-            <div class="about-color">
-              <div class="mini-swatch" :style="{ background: app.themeColorComputed.primary }"></div>
-              <n-text depth="3">{{ app.themeColorComputed.primary }}</n-text>
-            </div>
-          </div>
-          <div class="about-row">
-            <span class="about-key">主题</span>
-            <n-text depth="3">{{ app.isDarkMode ? '深色' : '浅色' }}</n-text>
-          </div>
-        </div>
-
-        <div class="about-actions">
+        <div class="reset-actions">
           <n-button size="small" @click="confirmResetAll">恢复默认设置</n-button>
         </div>
       </section>
@@ -362,11 +327,6 @@ function doResetAll() {
 /* 数字控件 */
 .number-control { display: flex; justify-content: flex-end; }
 
-/* 关于区 */
-.about-grid { display: flex; flex-direction: column; gap: 8px; }
-.about-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
-.about-key { color: var(--text-muted); }
-.about-color { display: flex; align-items: center; gap: 8px; }
-.mini-swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border-primary); }
-.about-actions { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-primary); }
+/* 恢复默认设置 */
+.reset-actions { margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--border-primary); }
 </style>

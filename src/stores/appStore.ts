@@ -67,24 +67,24 @@ export function resolveThemeColor(settings: AppSettings) {
   return PRESET_COLORS.find(c => c.key === settings.themeColor) ?? PRESET_COLORS[0]
 }
 
+/** 明暗主题偏好：用户手动切换并持久化；首次启动无存档时跟随一次系统偏好 */
+function loadDarkMode(): boolean {
+  try {
+    const saved = localStorage.getItem('devtools-theme')
+    if (saved === 'dark') return true
+    if (saved === 'light') return false
+  } catch { /* ignore */ }
+  return typeof window !== 'undefined'
+    && !!window.matchMedia?.('(prefers-color-scheme: dark)').matches
+}
+
 export const useAppStore = defineStore('app', () => {
   const isAdmin = ref(false)
   const checkingAdmin = ref(true)
   const globalLoading = ref(false)
 
-  // 主题跟随系统 prefers-color-scheme：不持久化、不提供手动切换
-  const prefersDark = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches
-  const isDarkMode = ref(prefersDark)
-
-  if (typeof window !== 'undefined' && window.matchMedia) {
-    const mql = window.matchMedia('(prefers-color-scheme: dark)')
-    const onSchemeChange = (e: MediaQueryListEvent) => {
-      isDarkMode.value = e.matches
-    }
-    if (typeof mql.addEventListener === 'function') {
-      mql.addEventListener('change', onSchemeChange)
-    }
-  }
+  // 深/浅色模式：由标题栏图标手动切换，持久化到 localStorage
+  const isDarkMode = ref(loadDarkMode())
 
   // 工具菜单：来自后端插件列表，加载失败时使用内置兜底（当前工具/功能由路由 URL 表达）
   const tools = ref<Record<string, ToolInfo>>({ ...FALLBACK_TOOLS })
@@ -119,6 +119,14 @@ export const useAppStore = defineStore('app', () => {
     } catch { /* ignore */ }
   }
 
+  /** 切换深/浅色模式，并持久化偏好 */
+  function toggleTheme(): void {
+    isDarkMode.value = !isDarkMode.value
+    try {
+      localStorage.setItem('devtools-theme', isDarkMode.value ? 'dark' : 'light')
+    } catch { /* ignore */ }
+  }
+
   async function loadTools(): Promise<void> {
     try {
       const list = await appService.getToolList()
@@ -136,6 +144,6 @@ export const useAppStore = defineStore('app', () => {
     isAdmin, checkingAdmin, isDarkMode,
     globalLoading,
     tools, settings, themeColorComputed,
-    loadTools, saveSettings, applyTheme
+    loadTools, saveSettings, toggleTheme, applyTheme
   }
 })

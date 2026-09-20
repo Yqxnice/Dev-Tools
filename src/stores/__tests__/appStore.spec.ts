@@ -33,4 +33,17 @@ describe('appStore 设置持久化', () => {
     const app = useAppStore()
     expect(app.settings.autoRefresh).toBe(true)
   })
+
+  it('toggleTheme 切换明暗模式并持久化', () => {
+    const app = useAppStore()
+    const initial = app.isDarkMode
+    app.toggleTheme()
+    expect(app.isDarkMode).toBe(!initial)
+    expect(localStorage.getItem('devtools-theme')).toBe(!initial ? 'dark' : 'light')
+
+    // 新 store 实例从存档恢复
+    setActivePinia(createPinia())
+    const app2 = useAppStore()
+    expect(app2.isDarkMode).toBe(!initial)
+  })
 })

@@ -5,6 +5,9 @@ import { NIcon, NTooltip } from 'naive-ui'
 import {
   LayersOutline,
   SettingsOutline,
+  InformationCircleOutline,
+  MoonOutline,
+  SunnyOutline,
   RemoveOutline, SquareOutline, CopyOutline, CloseOutline
 } from '@vicons/ionicons5'
 import { useAppStore } from '../../stores/appStore'
@@ -54,6 +57,15 @@ onUnmounted(() => {
     <div class="titlebar-spacer" data-tauri-drag-region />
 
     <div class="titlebar-actions">
+      <!-- 深/浅色模式切换：浅色显示月亮（切深色），深色显示太阳（切浅色） -->
+      <n-tooltip placement="bottom">
+        <template #trigger>
+          <button class="titlebar-btn" @click="app.toggleTheme()">
+            <n-icon :component="app.isDarkMode ? SunnyOutline : MoonOutline" />
+          </button>
+        </template>
+        {{ app.isDarkMode ? '切换到浅色模式' : '切换到深色模式' }}
+      </n-tooltip>
       <!-- 设置中心 -->
       <n-tooltip placement="bottom">
         <template #trigger>
@@ -62,6 +74,15 @@ onUnmounted(() => {
           </button>
         </template>
         设置
+      </n-tooltip>
+      <!-- 关于本项目 -->
+      <n-tooltip placement="bottom">
+        <template #trigger>
+          <button class="titlebar-btn" @click="router.push('/about')">
+            <n-icon :component="InformationCircleOutline" />
+          </button>
+        </template>
+        关于
       </n-tooltip>
       <!-- 全局任务中心 -->
       <TaskCenter />
