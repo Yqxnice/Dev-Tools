@@ -19,7 +19,8 @@ const PROJECT_REPO_URL = 'https://github.com/Yqxnice/Dev-Tools'
 const ISSUE_URL = 'https://github.com/Yqxnice/Dev-Tools/issues'
 const techStack = ['Tauri 2', 'Vue 3', 'Rust', 'Naive UI', 'TypeScript']
 const license = 'MIT'
-const version = 'v0.1.0'
+// Vite 构建时注入 package.json 版本号，无需 Tauri runtime 权限
+const version = ref('v' + (import.meta.env.PACKAGE_VERSION || '未知'))
 
 const features = [
   {

@@ -80,14 +80,12 @@ pub async fn change_mysql_password(
 #[tauri::command]
 pub async fn start_mysql_service(app_handle: AppHandle, service_name: String) -> Result<(), String> {
     process_manager::validate_service_name(&service_name)?;
-    access::require_admin()?;
     detector::start_mysql_service(app_handle, service_name).await
 }
 
 #[tauri::command]
 pub async fn stop_mysql_service(app_handle: AppHandle, service_name: String) -> Result<(), String> {
     process_manager::validate_service_name(&service_name)?;
-    access::require_admin()?;
     detector::stop_mysql_service(app_handle, service_name).await
 }
 

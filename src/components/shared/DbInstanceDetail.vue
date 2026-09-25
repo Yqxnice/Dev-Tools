@@ -3,7 +3,6 @@ import { computed, toRefs } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton } from 'naive-ui'
 import { useLoggerStore } from '../../stores/loggerStore'
-import { usePermission } from '../../composables/usePermission'
 import InstanceDetailCard from '../shared/InstanceDetailCard.vue'
 import type { DetailField, DetailBadge } from '../shared/InstanceDetailCard.vue'
 import type { DbStore } from '../../types/dbStore'
@@ -24,7 +23,6 @@ const props = defineProps<{
 }>()
 
 const log = useLoggerStore()
-const perm = usePermission()
 const router = useRouter()
 
 const { selectedResidueInstance } = toRefs(props.store)
@@ -106,9 +104,7 @@ function gotoResidueClear() {
         v-if="inst.service_name && (inst.status === '停止' || inst.status === 'stopped')"
         type="primary"
         size="small"
-        :disabled="!perm.can('serviceControl')"
         :loading="operating"
-        :title="perm.can('serviceControl') ? '' : '需要管理员权限'"
         @click="startService"
       >
         启动服务
@@ -117,9 +113,7 @@ function gotoResidueClear() {
         v-if="inst.service_name && (inst.status === '启动' || inst.status === 'running')"
         type="error"
         size="small"
-        :disabled="!perm.can('serviceControl')"
         :loading="operating"
-        :title="perm.can('serviceControl') ? '' : '需要管理员权限'"
         @click="stopService"
       >
         停止服务

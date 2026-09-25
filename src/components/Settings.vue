@@ -20,6 +20,8 @@ const downloadDir = ref('')
 const logDir = ref('')
 const resetConfirmVisible = ref(false)
 const customColorValid = ref(true)
+// Vite 构建时注入 package.json 版本号，无需 Tauri runtime 权限即可同步显示
+const currentVersion = ref(import.meta.env.PACKAGE_VERSION || '未知')
 
 // 配置导入/导出（Feature 9）
 const configIO = useConfigIO()
@@ -477,7 +479,7 @@ async function onOpenRelease() {
             </p>
             <div class="settings__update-info">
               <span class="settings__update-version">
-                当前版本：v{{ updateInfo?.current_version || '0.1.0' }}
+                当前版本：v{{ updateInfo?.current_version || currentVersion }}
               </span>
               <n-button
                 size="small"
