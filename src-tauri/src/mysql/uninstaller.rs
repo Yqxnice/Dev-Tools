@@ -121,6 +121,12 @@ async fn uninstall_via_registry(app_handle: &AppHandle, filter: &str) {
     let mut env_vars = HashMap::new();
     env_vars.insert("UNINSTALL_FILTER".to_string(), filter.to_string());
 
+    // 安全说明：通过环境变量传递过滤条件（$env:UNINSTALL_FILTER），
+    // PowerShell 脚本内部使用 -match 操作符匹配，不涉及字符串拼接命令。
+    // 注册表值（UninstallString/QuietUninstallString）来自系统注册表，
+    // 由 Windows 安装程序写入，非用户可控输入。但仍需验证：
+    // - 检查路径是否包含系统目录外的可执行文件
+    // - 阻止包含 shell 元字符的值
     let script = r#"
         $ErrorActionPreference = 'Continue'
         $filter = $env:UNINSTALL_FILTER
@@ -134,15 +140,21 @@ async fn uninstall_via_registry(app_handle: &AppHandle, filter: &str) {
                 Where-Object { $_.DisplayName -match 'MySQL|MariaDB' -and $_.DisplayName -match $filter } |
                 ForEach-Object {
                     Write-Output "FOUND: $($_.DisplayName)"
-                    if ($_.QuietUninstallString) {
-                        Start-Process cmd.exe -ArgumentList "/c `"$($_.QuietUninstallString)`"" -Wait -NoNewWindow
-                    } elseif ($_.UninstallString) {
-                        $cmd = $_.UninstallString
-                        if ($cmd -match 'msiexec') {
-                            Start-Process cmd.exe -ArgumentList "/c $cmd /quiet /norestart" -Wait -NoNewWindow
-                        } else {
-                            Start-Process cmd.exe -ArgumentList "/c `"$cmd`" /S" -Wait -NoNewWindow
+                    # 安全检查：验证卸载字符串不包含危险字符
+                    $uninstallCmd = if ($_.QuietUninstallString) { $_.QuietUninstallString } elseif ($_.UninstallString) { $_.UninstallString } else { $null }
+                    if ($uninstallCmd -and $uninstallCmd -notmatch '[;|&`$]') {
+                        if ($_.QuietUninstallString) {
+                            Start-Process cmd.exe -ArgumentList "/c `"$($_.QuietUninstallString)`"" -Wait -NoNewWindow
+                        } elseif ($_.UninstallString) {
+                            $cmd = $_.UninstallString
+                            if ($cmd -match 'msiexec') {
+                                Start-Process cmd.exe -ArgumentList "/c $cmd /quiet /norestart" -Wait -NoNewWindow
+                            } else {
+                                Start-Process cmd.exe -ArgumentList "/c `"$cmd`" /S" -Wait -NoNewWindow
+                            }
                         }
+                    } else {
+                        Write-Output "SKIPPED: 卸载字符串包含危险字符: $uninstallCmd"
                     }
                 }
         }

@@ -1,13 +1,13 @@
 import { ref, reactive, computed } from 'vue'
 import { useToolDetection } from './useToolDetection'
-import { useDownloadControl } from './useDownloadControl'
+import { formatFileSize } from '../utils/format'
 import type { CleanScanResult, CleanResult, CleanOptions } from '../types'
 
 /** 数据库工具 Service 的通用接口 */
 export interface DbService<TInstance, TInfo, TVersionInfo> {
   detect: () => Promise<TInfo>
   getAvailableVersions: () => Promise<TVersionInfo[]>
-  downloadVersion: (...args: any[]) => Promise<string>
+  downloadVersion: (version: string, ...extra: unknown[]) => Promise<string>
   uninstall: (services: string[] | null, instances: TInstance[] | null) => Promise<void>
   scanResidue: (instance: TInstance) => Promise<CleanScanResult>
   cleanResidue: (instance: TInstance, options: CleanOptions) => Promise<CleanResult>
@@ -50,7 +50,7 @@ export interface DbToolConfig<TInstance, TInfo, TVersionInfo> {
   /** cleanRegistryInstaller 默认值（MySQL true，PG false） */
   cleanRegistryInstallerDefault?: boolean
   /** 生成下载任务唯一键，默认用 version；MySQL 需拼接 packageType */
-  makeDownloadKey?: (version: string, ...extra: any[]) => string
+  makeDownloadKey?: (version: string, ...extra: unknown[]) => string
 }
 
 interface DbInstanceLike {
@@ -69,10 +69,9 @@ interface DbInfoLike<TInstance> {
 export function useDbTool<TInstance extends DbInstanceLike, TInfo extends DbInfoLike<TInstance>, TVersionInfo>(
   config: DbToolConfig<TInstance, TInfo, TVersionInfo>
 ) {
-  const { id, cacheKey, downloadPrefix, service, cleanRegistryInstallerDefault = true, makeDownloadKey } = config
+  const { cacheKey, downloadPrefix, service, cleanRegistryInstallerDefault = true, makeDownloadKey } = config
 
-  const cache = useToolDetection<TInfo>(service, cacheKey)
-  const dl = useDownloadControl(downloadPrefix)
+  const cache = useToolDetection<TInfo>(service as Pick<DbService<TInstance, TInfo, TVersionInfo>, 'detect'>, cacheKey)
 
   const versionInfo = ref<TInfo | null>(null)
   const uninstallInstances = ref<TInstance[]>([])
@@ -84,7 +83,6 @@ export function useDbTool<TInstance extends DbInstanceLike, TInfo extends DbInfo
   const residueConfirmVisible = ref(false)
   const operatingInstances = ref<Set<string>>(new Set())
   const availableVersions = ref<TVersionInfo[]>([])
-  const downloadingKey = ref<string | null>(null)
 
   const cleanOptions = reactive<CleanOptionsForm>({
     killProcesses: true, removeServices: true, cleanInstallDir: true,
@@ -141,17 +139,9 @@ export function useDbTool<TInstance extends DbInstanceLike, TInfo extends DbInfo
     }
   }
 
-  async function downloadVersion(version: string, ...extra: any[]): Promise<string> {
-    const key = makeDownloadKey ? makeDownloadKey(version, ...extra) : version
-    dl.currentTaskId.value = `${downloadPrefix}${key}`
-    downloadingKey.value = key
-    dl.downloadProgress.value = null
-    try {
-      return await service.downloadVersion(version, ...extra)
-    } finally {
-      downloadingKey.value = null
-      dl.currentTaskId.value = null
-    }
+  async function downloadVersion(version: string, ...extra: unknown[]): Promise<string> {
+    // 下载进度统一由 taskStore（下载中心）跟踪，此处仅触发后端下载并返回安装包路径
+    return await service.downloadVersion(version, ...extra)
   }
 
   async function uninstall(instance: TInstance | null): Promise<void> {
@@ -273,13 +263,10 @@ export function useDbTool<TInstance extends DbInstanceLike, TInfo extends DbInfo
     selectedUninstallInstance, selectedPasswordInstance, selectedResidueInstance, selectedInstance,
     residueScanResult, residueConfirmVisible,
     operatingInstances, loading: cache.loading,
-    availableVersions, downloadingKey,
-    downloadProgress: dl.downloadProgress,
-    dismissDownloadProgress: dl.dismissDownloadProgress,
-    formatFileSize: dl.formatFileSize,
-    pauseDownload: dl.pauseDownload,
-    resumeDownload: dl.resumeDownload,
-    cancelDownload: dl.cancelDownload,
+    availableVersions,
+    downloadPrefix,
+    makeDownloadKey,
+    formatFileSize,
     cleanOptions, tempPassword, formData,
     residueInstances, hasResidueToClean,
     clearCache, detect, uninstall,

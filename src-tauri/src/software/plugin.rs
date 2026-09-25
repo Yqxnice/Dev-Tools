@@ -24,10 +24,13 @@ impl ToolPlugin for SoftwarePlugin {
     }
 
     fn invoke_handler(&self) -> Box<dyn Fn(Invoke<Wry>) -> bool + Send + Sync + 'static> {
-        Box::new(tauri::generate_handler![commands::resolve_software_icon])
+        Box::new(tauri::generate_handler![
+            commands::resolve_software_icon,
+            commands::check_software_installed,
+        ])
     }
 
     fn command_names(&self) -> &'static [&'static str] {
-        &["resolve_software_icon"]
+        &["resolve_software_icon", "check_software_installed"]
     }
 }

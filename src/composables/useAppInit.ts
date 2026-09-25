@@ -2,25 +2,40 @@
  * 应用初始化编排:admin 检测 → 日志清空 → 检测实例 → 预取版本列表。
  *
  * 拆离 App.vue,降低根组件职责密度,便于单独测试与复用。
+ * 数据驱动：通过 TOOL_INITS 数组注册工具，添加新工具只需在此数组中增加一项。
  */
 import { useLoggerStore } from '../stores/loggerStore'
+import { useAppStore } from '../stores/appStore'
 import { useMySQLStore } from '../stores/mysqlStore'
+import { usePostgresqlStore } from '../stores/postgresqlStore'
 import { usePythonStore } from '../stores/pythonStore'
 import { useNodeStore } from '../stores/nodeStore'
+import { useJavaStore } from '../stores/javaStore'
 import { useJetBrainsStore } from '../stores/jetbrainsStore'
-import { usePostgresqlStore } from '../stores/postgresqlStore'
-import { useAppStore } from '../stores/appStore'
 import { appService } from '../services/appService'
 import { prefetchSoftwareIcons } from './useSoftwareIcons'
+
+interface ToolInitEntry {
+  name: string
+  getStore: () => {
+    detect: () => Promise<unknown>
+    loadAvailableVersions?: () => Promise<unknown[]>
+  }
+  versionLabel: string
+}
+
+const TOOL_INITS: ToolInitEntry[] = [
+  { name: 'MySQL', getStore: () => useMySQLStore(), versionLabel: 'MySQL' },
+  { name: 'PostgreSQL', getStore: () => usePostgresqlStore(), versionLabel: 'PostgreSQL' },
+  { name: 'Python', getStore: () => usePythonStore(), versionLabel: 'Python' },
+  { name: 'Node.js', getStore: () => useNodeStore(), versionLabel: 'Node.js' },
+  { name: 'Java', getStore: () => useJavaStore(), versionLabel: 'Java' },
+  { name: 'JetBrains', getStore: () => useJetBrainsStore(), versionLabel: 'JetBrains' },
+]
 
 export function useAppInit() {
   const log = useLoggerStore()
   const app = useAppStore()
-  const mysqlStore = useMySQLStore()
-  const pythonStore = usePythonStore()
-  const nodeStore = useNodeStore()
-  const jetbrainsStore = useJetBrainsStore()
-  const postgresqlStore = usePostgresqlStore()
 
   let unlistenLog: (() => void) | null = null
 
@@ -38,9 +53,6 @@ export function useAppInit() {
 
   async function initApp() {
     log.clearLogs()
-    addLog('info', '========== 应用初始化 ==========')
-    addLog('info', app.isAdmin ? '当前以管理员权限运行，全部功能可用' : '当前为普通用户权限，危险操作不可用')
-    // 软件图标后台预取（不 await：第三方探测+后端解析不阻塞初始化与主功能）
     prefetchSoftwareIcons()
     await app.loadTools()
     try {
@@ -50,34 +62,24 @@ export function useAppInit() {
     } catch (e) {
       addLog('warn', `日志监听未启动: ${e}`)
     }
+
     if (app.settings.autoRefresh) {
-      await Promise.allSettled([
-        mysqlStore.detect().catch(() => {}),
-        pythonStore.detectPython().catch(() => {}),
-        nodeStore.detectNode().catch(() => {}),
-        jetbrainsStore.detectJetBrains().catch(() => {}),
-        postgresqlStore.detect().catch(() => {})
-      ])
-    } else {
-      addLog('info', '已关闭启动自动检测，可手动点击刷新')
+      await Promise.allSettled(
+        TOOL_INITS.map(async (entry) => {
+          const store = entry.getStore()
+          await store.detect().catch(() => {})
+        })
+      )
     }
-    // 后台预取可用版本列表(只读网络请求,所有权限级别可用,不阻塞启动)
-    pythonStore.loadAvailableVersions()
-      .then(r => addLog('info', `Python 可用版本已就绪（${r.length} 个）`))
-      .catch(() => addLog('warn', 'Python 可用版本预取失败，可在「可用版本」页手动刷新'))
-    nodeStore.loadAvailableVersions()
-      .then(r => addLog('info', `Node.js 可用版本已就绪（${r.length} 个）`))
-      .catch(() => addLog('warn', 'Node.js 可用版本预取失败，可在「可用版本」页手动刷新'))
-    jetbrainsStore.loadAvailableVersions()
-      .then(r => addLog('info', `JetBrains 可用版本已就绪（${r.length} 个）`))
-      .catch(() => addLog('warn', 'JetBrains 可用版本预取失败，可在「下载安装包」页手动刷新'))
-    mysqlStore.loadAvailableVersions()
-      .then(r => addLog('info', `MySQL 可用版本已就绪（${r.length} 个）`))
-      .catch(() => addLog('warn', 'MySQL 可用版本预取失败，可在「下载安装包」页手动刷新'))
-    postgresqlStore.loadAvailableVersions()
-      .then(r => addLog('info', `PostgreSQL 可用版本已就绪（${r.length} 个）`))
-      .catch(() => addLog('warn', 'PostgreSQL 可用版本预取失败，可在「可用版本」页手动刷新'))
-    addLog('info', '========== 初始化完成 ==========')
+
+    // 后台预取可用版本列表（不阻塞启动）
+    for (const entry of TOOL_INITS) {
+      const store = entry.getStore()
+      if (store.loadAvailableVersions) {
+        store.loadAvailableVersions()
+          .catch(() => addLog('warn', `${entry.versionLabel} 可用版本预取失败，可在对应页面手动刷新`))
+      }
+    }
   }
 
   function disposeLog() {

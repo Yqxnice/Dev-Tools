@@ -36,7 +36,7 @@ const emptyText = computed(() => {
 
 onMounted(() => {
   if (py.versions.length === 0) {
-    py.detectPython().catch(e => log.addLog('warn', `检测 Python 版本失败: ${e}`))
+    py.detect().catch(e => log.addLog('warn', `检测 Python 版本失败: ${e}`))
   }
 })
 
@@ -48,10 +48,8 @@ watch(selectedPython, () => {
 async function handleRefresh() {
   loadError.value = ''
   py.packages = []
-  log.addLog('info', '开始加载已安装的 Python 包...')
   try {
-    const result = await py.loadPackages(selectedPython.value)
-    log.addLog('info', `加载完成，发现 ${result.length} 个 Python 包`)
+    await py.loadPackages(selectedPython.value)
   } catch (e) {
     loadError.value = `加载失败：${e}（可能未安装 Python 或未加入 PATH）`
     log.addLog('error', `加载失败: ${e}`)
@@ -69,36 +67,64 @@ async function handleRefresh() {
     @refresh="handleRefresh"
   >
     <template #actions>
-      <n-button type="primary" :loading="py.loading" @click="handleRefresh">
+      <n-button
+        type="primary"
+        :loading="py.loading"
+        @click="handleRefresh"
+      >
         {{ py.loading ? '加载中...' : '查看已安装包' }}
       </n-button>
     </template>
 
     <template #toolbar>
       <div class="interpreter-pick">
-        <n-text depth="3" style="font-size:12px">目标解释器</n-text>
-        <n-select :value="selectedPython ?? ''" :options="interpreterOptions" size="small"
-          @update:value="onInterpreterChange" />
+        <n-text
+          depth="3"
+          style="font-size:12px"
+        >
+          目标解释器
+        </n-text>
+        <n-select
+          :value="selectedPython ?? ''"
+          :options="interpreterOptions"
+          size="small"
+          @update:value="onInterpreterChange"
+        />
       </div>
-      <div v-if="py.packages.length > 0" class="pkg-toolbar">
-        <n-input v-model:value="keyword" size="small" clearable placeholder="搜索包名..." />
-        <n-tag type="info" size="small">{{ filteredPackages.length }} / {{ py.packages.length }}</n-tag>
+      <div
+        v-if="py.packages.length > 0"
+        class="pkg-toolbar"
+      >
+        <n-input
+          v-model:value="keyword"
+          size="small"
+          clearable
+          placeholder="搜索包名..."
+        />
+        <n-tag
+          type="info"
+          size="small"
+        >
+          {{ filteredPackages.length }} / {{ py.packages.length }}
+        </n-tag>
       </div>
     </template>
 
     <template #row="{ item: pkg }">
       <div class="pkg-row">
         <span class="pkg-name">{{ pkg.name }}</span>
-        <n-tag size="small" :bordered="false">{{ pkg.version }}</n-tag>
+        <n-tag
+          size="small"
+          :bordered="false"
+        >
+          {{ pkg.version }}
+        </n-tag>
       </div>
     </template>
   </FlatTablePanel>
 </template>
 
 <style scoped>
-.interpreter-pick { display: flex; flex-direction: column; gap: 6px; max-width: 420px; margin-bottom: 14px; }
-.pkg-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.pkg-toolbar .n-input { max-width: 240px; }
-.pkg-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; background: var(--bg-card); border: 1px solid var(--border-primary); border-radius: 6px; }
-.pkg-name { font-size: 13px; font-weight: 500; word-break: break-all; }
+.interpreter-pick { display: flex; flex-direction: column; gap: var(--spacing-2); max-width: 420px; margin-bottom: var(--spacing-4); }
+/* 样式来自 feature-common.css 的 .pkg-toolbar / .pkg-row / .pkg-name */
 </style>

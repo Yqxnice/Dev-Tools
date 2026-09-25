@@ -1,25 +1,17 @@
+import { createLangService } from './langServiceFactory'
 import { ipc } from './ipc'
 import type { NodeVersion, NodePackage, NpmMirror, AvailableNodeVersion } from '../types'
 
+/**
+ * Node.js Service — 使用通用 Lang Service 工厂生成。
+ * Node.js 独有的 listPackages 方法需要单独定义。
+ */
+const base = createLangService<NodeVersion, NpmMirror, AvailableNodeVersion>('node')
+
 export const nodeService = {
-  detect: () =>
-    ipc<NodeVersion[]>('detect_node'),
+  ...base,
 
-  detectDefault: () =>
-    ipc<NodeVersion | null>('detect_default_node'),
-
+  // Node.js 独有方法
   listPackages: (nodePath: string | null) =>
     ipc<NodePackage[]>('list_node_packages', { nodePath: nodePath || null }),
-
-  listMirrors: () =>
-    ipc<NpmMirror[]>('list_node_mirrors'),
-
-  switchMirror: (mirrorName: string, mirrorUrl: string) =>
-    ipc<string>('switch_node_mirror', { mirrorName, mirrorUrl }),
-
-  getAvailableVersions: () =>
-    ipc<AvailableNodeVersion[]>('get_available_node_versions'),
-
-  getDownloadUrl: (version: string) =>
-    ipc<string>('get_node_download_url', { version }),
 }

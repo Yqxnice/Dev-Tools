@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import App from "./App.vue"
 import { router } from "./router"
 import { useLoggerStore } from "./stores/loggerStore"
+import { setIpcLogger } from "./services/ipc"
 import './theme/global.css'
 import './assets/feature-common.css'
 
@@ -37,9 +38,33 @@ function bridgeTauriCspNonce(): void {
 
 bridgeTauriCspNonce()
 
+/**
+ * 在首帧绘制前同步写入主题背景色（与 tokens.ts 的 bg.primary 同值）。
+ * 主题 CSS 变量要等 Vue 挂载后由 appStore.applyTheme() 写入，此前 body 无背景，
+ * 窗口显示时会露出原生窗口底色造成"黑一下"。模块脚本在首帧绘制前执行，提前铺底。
+ * CSP 允许 script-src 'self'，模块文件内联执行无限制。
+ */
+function applyInitialBackground(): void {
+  let dark = window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true
+  try {
+    const saved = localStorage.getItem('devtools-theme')
+    if (saved === 'dark') dark = true
+    else if (saved === 'light') dark = false
+  } catch { /* ignore */ }
+  document.documentElement.style.background = dark ? '#0f1019' : '#f6f7fb'
+}
+
+applyInitialBackground()
+
 const app = createApp(App)
-app.use(createPinia())
+const pinia = createPinia()
+app.use(pinia)
 app.use(router)
+
+// 注入 IPC logger，打破 service→store 循环依赖
+setIpcLogger((level, message) => {
+  try { useLoggerStore().addLog(level, message) } catch { /* store 未就绪 */ }
+})
 
 // 全局错误兜底：未被组件捕获的错误统一进入日志面板
 function reportError(scope: string, err: unknown): void {

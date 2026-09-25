@@ -8,8 +8,8 @@
  * - 列表循环（#row 插槽自治渲染每行内容，外层 .flat-row 不强制样式）
  * - 空态（items 为空时显示 n-empty）
  *
- * 与 DownloadList 的区别：DownloadList 自带进度卡片 + 下载事件监听器绑定；
- * FlatTablePanel 是更精简的纯列表容器，不绑定任何业务事件。
+ * 纯列表容器，不绑定任何业务事件。
+ * 下载进度统一由「下载中心」页面（/downloads）展示，本组件仅承载版本列表与下载按钮。
  *
  * 用法:
  * <FlatTablePanel title="Python 环境列表" :items="py.envs" :loading="py.loading"
@@ -40,11 +40,17 @@ defineEmits<{
     <div class="feature-header">
       <div>
         <h3>{{ title }}</h3>
-        <p v-if="description">{{ description }}</p>
+        <p v-if="description">
+          {{ description }}
+        </p>
       </div>
       <div class="feature-actions">
         <slot name="actions">
-          <n-button type="primary" :loading="loading" @click="$emit('refresh')">
+          <n-button
+            type="primary"
+            :loading="loading"
+            @click="$emit('refresh')"
+          >
             {{ loading ? '加载中...' : '刷新' }}
           </n-button>
         </slot>
@@ -53,13 +59,36 @@ defineEmits<{
 
     <slot name="toolbar" />
 
-    <div v-if="items.length > 0" class="flat-list">
-      <div v-for="(item, index) in items" :key="index" class="flat-row">
-        <slot name="row" :item="item" :index="index" />
+    <div
+      v-if="items.length > 0"
+      class="flat-list"
+    >
+      <div
+        v-for="(item, index) in items"
+        :key="index"
+        class="flat-row"
+      >
+        <slot
+          name="row"
+          :item="item"
+          :index="index"
+        />
       </div>
     </div>
-    <n-empty v-else :description="emptyText" />
+    <n-empty
+      v-else
+      :description="emptyText"
+    />
 
     <slot name="extra" />
   </div>
 </template>
+
+<style scoped>
+.flat-row {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+</style>

@@ -14,7 +14,8 @@ import {
   CubeOutline,
   GlobeOutline,
   RocketOutline,
-  AppsOutline
+  AppsOutline,
+  TerminalOutline
 } from '@vicons/ionicons5'
 
 const props = defineProps<{ name: string }>()
@@ -33,14 +34,18 @@ const ICON_MAP: Record<string, Component> = {
   box: CubeOutline,
   globe: GlobeOutline,
   rocket: RocketOutline,
-  apps: AppsOutline
+  apps: AppsOutline,
+  terminal: TerminalOutline,
 }
 
 const icon = computed(() => ICON_MAP[props.name] ?? CubeOutline)
 </script>
 
 <template>
-  <n-icon :component="icon" class="feature-icon" />
+  <n-icon
+    :component="icon"
+    class="feature-icon"
+  />
 </template>
 
 <style scoped>

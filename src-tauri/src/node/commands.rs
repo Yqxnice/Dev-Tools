@@ -1,7 +1,7 @@
 //! Node.js 工具的 IPC 命令定义
 
 use crate::types::*;
-use tauri::AppHandle;
+use tauri::{AppHandle, Window};
 
 use super::detector;
 use super::mirror_manager;
@@ -58,4 +58,14 @@ pub async fn get_available_node_versions(
 pub fn get_node_download_url(version: String) -> Result<String, String> {
     version_fetcher::validate_version_string(&version)?;
     Ok(version_fetcher::get_download_url(&version))
+}
+
+/// 下载指定版本的 Node.js 安装包
+#[tauri::command]
+pub async fn download_node(
+    app_handle: AppHandle,
+    version: String,
+    window: Window,
+) -> Result<String, String> {
+    version_fetcher::download_node_only(app_handle, version, window).await
 }

@@ -478,21 +478,16 @@ pub async fn reset_mysql_password(
 ) -> Result<String, String> {
     // 首先验证新密码的安全性
     validate_password_strength(&new_password)?;
-    
-    logger::info(&app_handle, "========================================");
+
     logger::info(&app_handle, "开始自动重置 MySQL 密码");
-    logger::info(&app_handle, "========================================");
 
     let mysql_info = detector::detect_all_mysql(Some(&app_handle)).await?;
-    logger::info(&app_handle, &format!("检测到 {} 个 MySQL 实例", mysql_info.instances.len()));
 
     let instance = crate::detector_base::select_valid_instance(
         selected_instance.as_ref(),
         &mysql_info.instances,
         "MySQL",
     )?;
-    logger::info(&app_handle, &format!("使用实例: 版本 {}, 服务 {:?}, 路径 {}",
-        instance.version, instance.service_name, instance.path));
 
     let service_name = match &instance.service_name {
         Some(name) => name,
@@ -503,18 +498,12 @@ pub async fn reset_mysql_password(
     };
     let version = &instance.version;
     let port = resolve_port(instance, override_port);
-    if let Some(p) = port {
-        logger::info(&app_handle, &format!("使用端口: {} ({})", p, if override_port.is_some() { "手动指定" } else { "自动检测" }));
-    }
 
-    logger::info(&app_handle, &format!("使用的 MySQL 实例: 版本 {}, 服务 {}, 路径 {}", 
+    logger::info(&app_handle, &format!("使用的 MySQL 实例: 版本 {}, 服务 {}, 路径 {}",
         version, service_name, instance.path));
 
     let mysql_path = PathBuf::from(&instance.path).join("mysql.exe");
     let mysqld_path = PathBuf::from(&instance.path).join("mysqld.exe");
-
-    logger::info(&app_handle, &format!("检查 MySQL 可执行文件: mysql.exe={:?}, mysqld.exe={:?}", 
-        mysql_path.exists(), mysqld_path.exists()));
 
     if !mysqld_path.exists() {
         logger::error(&app_handle, &format!("未找到 mysqld.exe: {:?}", mysqld_path));
@@ -530,10 +519,20 @@ pub async fn reset_mysql_password(
 
     logger::info(&app_handle, "正在以无授权模式启动 MySQL...");
     let config_file = detector::get_mysql_config_file(Some(service_name), &instance.path).await;
+    // 高风险操作前将 my.ini 备份到下载目录/{版本号}/ 留底（重置不修改 my.ini，但停服/起无授权实例有风险）
+    if let Some(config_path) = &config_file {
+        let backup = crate::download_control::backup_config_to_download_dir(
+            config_path,
+            version,
+        )
+        .await;
+        if let Some(p) = backup {
+            logger::info(&app_handle, &format!("my.ini 已备份至: {}", p.display()));
+        }
+    }
     let mut startup_args: Vec<String> = Vec::new();
     if let Some(config_path) = &config_file {
         let config_arg = format!(r#"--defaults-file={}"#, config_path.display());
-        logger::info(&app_handle, &format!("使用配置文件: {}", config_path.display()));
         startup_args.push(config_arg);
     } else {
         logger::warn(&app_handle, "未找到 my.ini 配置文件，可能连接到错误的数据目录");
@@ -541,9 +540,6 @@ pub async fn reset_mysql_password(
     startup_args.push("--skip-grant-tables".to_string());
     startup_args.push("--shared-memory".to_string());
     startup_args.push("--skip-networking".to_string());
-
-    let args_str = startup_args.join(" ");
-    logger::info(&app_handle, &format!("启动命令: mysqld {}", args_str));
 
     let mut cmd = tokio::process::Command::new(&mysqld_path);
     cmd.args(&startup_args);
@@ -604,19 +600,15 @@ pub async fn reset_mysql_password(
     }
 
     logger::info(&app_handle, "正在连接并修改密码...");
-    
-    // 首先查询一下当前的用户情况（查看所有用户）
-    logger::info(&app_handle, "正在查询当前MySQL所有用户信息...");
+
     let query_users_sql = "SELECT User, Host, LENGTH(User) AS user_len FROM mysql.user;";
     let query_result = process_manager::execute_command(
         mysql_path.to_str().unwrap_or(""),
         &["-u", "root", "--protocol=memory", "-e", query_users_sql]
     ).await;
-    
+
     if let Ok(output) = &query_result {
-        if output.exit_code == 0 {
-            logger::info(&app_handle, &format!("当前所有用户信息:\n{}", output.stdout));
-        } else {
+        if output.exit_code != 0 {
             logger::warn(&app_handle, &format!("查询用户失败:\n{}", output.stderr));
         }
     }
@@ -632,11 +624,6 @@ pub async fn reset_mysql_password(
     }
     let full_sql = build_password_reset_sql(version, &new_password);
 
-    // 在日志中掩码密码：SQL 中存的是转义后的密码，对转义串做 replace 才能正确匹配
-    let escaped_pwd = escape_mysql_password(&new_password);
-    let masked_sql = full_sql.replace(&escaped_pwd, "***");
-    logger::info(&app_handle, &format!("执行 SQL 脚本 (密码已掩码): {}", masked_sql));
-    
     let mysql_path_str = match mysql_path.to_str() {
         Some(s) => s,
         None => {
@@ -655,13 +642,11 @@ pub async fn reset_mysql_password(
     let mut sql_success = false;
     match result {
         Ok(output) => {
-            logger::info(&app_handle, &format!("SQL 执行退出码: {}", output.exit_code));
             if output.exit_code != 0 {
                 logger::warn(&app_handle, &format!("SQL 执行警告: {}", output.stderr));
             } else {
                 let affected_rows = parse_affected_rows(&output.stdout);
                 if let Some(count) = affected_rows {
-                    logger::info(&app_handle, &format!("密码更新影响行数: {}", count));
                     if count > 0 || is_mysql_8_or_higher(version) {
                         sql_success = true;
                         logger::info(&app_handle, "SQL 执行成功！");
@@ -679,12 +664,7 @@ pub async fn reset_mysql_password(
                     }
                 }
             }
-            if !output.stdout.is_empty() {
-                logger::info(&app_handle, &format!("SQL 输出: {}", output.stdout));
-            } else {
-                logger::info(&app_handle, "SQL 输出: (空)");
-            }
-            if !output.stderr.is_empty() {
+            if !output.stderr.is_empty() && output.exit_code == 0 {
                 logger::warn(&app_handle, &format!("SQL 错误输出: {}", output.stderr));
             }
         }
@@ -710,13 +690,10 @@ pub async fn reset_mysql_password(
         
         match verify_result {
             Ok(output) => {
-                logger::info(&app_handle, &format!("验证查询退出码: {}", output.exit_code));
-                if output.exit_code == 0 {
-                    logger::info(&app_handle, "用户密码验证查询成功（哈希已隐藏）");
-                } else {
+                if output.exit_code != 0 {
                     logger::warn(&app_handle, &format!("验证查询警告:\n{}", output.stderr));
                 }
-                if !output.stderr.is_empty() {
+                if !output.stderr.is_empty() && output.exit_code == 0 {
                     logger::warn(&app_handle, &format!("验证查询错误输出:\n{}", output.stderr));
                 }
             }

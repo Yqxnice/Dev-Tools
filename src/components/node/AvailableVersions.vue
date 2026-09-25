@@ -1,21 +1,44 @@
 <script setup lang="ts">
-import { NButton, NTag } from 'naive-ui'
+import { NButton, NTag, NSpace } from 'naive-ui'
 import { open } from '@tauri-apps/plugin-shell'
 import { useNodeStore } from '../../stores/nodeStore'
 import { useLoggerStore } from '../../stores/loggerStore'
+import { useAppStore } from '../../stores/appStore'
+import { useTaskStore } from '../../stores/taskStore'
 import { nodeService } from '../../services/nodeService'
+import { appService } from '../../services/appService'
 import FlatTablePanel from '../shared/FlatTablePanel.vue'
 import type { AvailableNodeVersion } from '../../types'
 
 const node = useNodeStore()
 const log = useLoggerStore()
+const app = useAppStore()
+const task = useTaskStore()
 
 async function handleRefresh() {
-  log.addLog('info', '正在获取可用 Node.js 版本列表...')
   try {
-    const result = await node.loadAvailableVersions()
-    log.addLog('info', `获取完成，共 ${result.length} 个可用版本`)
+    await node.loadAvailableVersions()
   } catch (e) { log.addLog('error', `获取失败: ${e}`) }
+}
+
+async function doDownload(version: string): Promise<void> {
+  log.addLog('info', `开始下载 Node.js ${version} 安装包...`)
+  try {
+    const path = await node.downloadNodeVersion(version)
+    task.setDownloadedPath(`${node.downloadPrefix}${version}`, path)
+    log.addLog('success', `下载完成，安装包保存至: ${path}`)
+    if (app.settings.autoOpenDownloadFolder) {
+      try { await appService.openInFolder(path) } catch { /* 忽略失败 */ }
+    }
+  } catch (e) {
+    log.addLog('error', `下载失败: ${e}`)
+  }
+}
+
+async function downloadLocal(version: string) {
+  const taskId = `${node.downloadPrefix}${version}`
+  task.registerRetry(taskId, () => doDownload(version))
+  await doDownload(version)
 }
 
 async function downloadBrowser(version: string) {
@@ -30,43 +53,43 @@ async function downloadBrowser(version: string) {
 <template>
   <FlatTablePanel
     title="可用 Node.js 版本"
-    description="查看所有可用的 Node.js 版本（含 LTS 与 Current），点击浏览器下载安装包"
+    description="查看所有可用的 Node.js 版本（含 LTS 与 Current），下载安装包（进度请前往下载中心查看）"
     :items="node.availableVersions as AvailableNodeVersion[]"
     :loading="node.loading"
-    empty-text="点击「刷新」获取版本列表"
+    empty-text="点击「刷新列表」获取可用版本"
     @refresh="handleRefresh"
   >
-    <template #actions>
-      <n-button type="primary" :loading="node.loading" @click="handleRefresh">
-        {{ node.loading ? '加载中...' : '获取版本列表' }}
-      </n-button>
-    </template>
-
     <template #row="{ item }">
-      <div class="ver-row">
-        <div class="ver-info">
-          <span class="ver-name">Node.js</span>
-          <span class="ver-num">{{ item.version }}</span>
-          <n-tag :type="item.is_lts ? 'success' : 'default'" size="small">
-            {{ item.is_lts ? 'LTS' : 'Current' }}
-          </n-tag>
-          <span v-if="item.date" class="ver-date">{{ item.date }}</span>
-        </div>
-        <n-button type="primary" size="small" @click="downloadBrowser(item.version)">
+      <div class="version-row-info">
+        <span class="version-row-name">Node.js</span>
+        <span class="version-row-ver">{{ item.version }}</span>
+        <n-tag
+          :type="item.is_lts ? 'success' : 'default'"
+          size="small"
+        >
+          {{ item.is_lts ? 'LTS' : 'Current' }}
+        </n-tag>
+        <span
+          v-if="item.date"
+          class="version-row-sub"
+        >{{ item.date }}</span>
+      </div>
+      <n-space>
+        <n-button
+          type="primary"
+          size="small"
+          @click="downloadLocal(item.version)"
+        >
+          本地下载
+        </n-button>
+        <n-button
+          type="default"
+          size="small"
+          @click="downloadBrowser(item.version)"
+        >
           浏览器下载
         </n-button>
-      </div>
+      </n-space>
     </template>
   </FlatTablePanel>
 </template>
-
-<style scoped>
-.ver-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 10px 14px; background: var(--bg-card); border: 1px solid var(--border-primary); border-radius: 8px;
-}
-.ver-info { display: flex; align-items: center; gap: 10px; }
-.ver-name { font-size: 13px; color: var(--text-secondary); }
-.ver-num { font-size: 14px; font-weight: 600; font-family: var(--font-mono); }
-.ver-date { font-size: 11px; color: var(--text-muted); }
-</style>

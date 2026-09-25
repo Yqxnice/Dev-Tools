@@ -1,23 +1,22 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { NIcon, NTooltip } from 'naive-ui'
 import {
-  LayersOutline,
-  SettingsOutline,
-  InformationCircleOutline,
+  LogoGithub,
   MoonOutline,
   SunnyOutline,
-  RemoveOutline, SquareOutline, CopyOutline, CloseOutline
+  RemoveOutline, SquareOutline, CopyOutline, CloseOutline,
+  MenuOutline
 } from '@vicons/ionicons5'
 import { useAppStore } from '../../stores/appStore'
 import { appService } from '../../services/appService'
+import { open } from '@tauri-apps/plugin-shell'
 import TaskCenter from '../common/TaskCenter.vue'
 
-const app = useAppStore()
-const router = useRouter()
+const PROJECT_REPO_URL = 'https://github.com/Yqxnice/Dev-Tools'
 
-// 窗口最大化状态同步
+const app = useAppStore()
+
 const isMaximized = ref(false)
 async function refreshMaximized() {
   isMaximized.value = await appService.isWindowMaximized()
@@ -38,63 +37,92 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <header class="app-titlebar" data-tauri-drag-region>
-    <div class="titlebar-left" data-tauri-drag-region>
-      <div class="brand">
-        <div class="brand-icon">
-          <n-icon :component="LayersOutline" />
-        </div>
-        <span class="brand-name">Dev Tools</span>
-      </div>
-      <!-- 权限徽章：常驻可见，强化桌面应用的安全感 -->
-      <div :class="['status-badge', { admin: app.isAdmin }]">
-        <span class="status-dot"></span>
-        {{ app.isAdmin ? '管理员' : '普通用户' }}
+  <header
+    class="titlebar"
+    data-tauri-drag-region
+  >
+    <div
+      class="titlebar__left"
+      data-tauri-drag-region
+    >
+      <n-tooltip
+        placement="bottom"
+        :delay="300"
+      >
+        <template #trigger>
+          <button
+            class="icon-btn"
+            @click="app.toggleSidebar()"
+          >
+            <n-icon :component="MenuOutline" />
+          </button>
+        </template>
+        {{ app.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏' }}
+      </n-tooltip>
+      <div :class="['badge', { 'badge--admin': app.isAdmin }]">
+        <span class="badge__dot" />
+        <span class="badge__text">{{ app.isAdmin ? '管理员' : '普通用户' }}</span>
       </div>
     </div>
 
-    <!-- 中间拖拽区：占满剩余空间，提供宽阔的拖拽手柄 -->
-    <div class="titlebar-spacer" data-tauri-drag-region />
+    <div
+      class="titlebar__drag"
+      data-tauri-drag-region
+    />
 
-    <div class="titlebar-actions">
-      <!-- 深/浅色模式切换：浅色显示月亮（切深色），深色显示太阳（切浅色） -->
-      <n-tooltip placement="bottom">
+    <div class="titlebar__right">
+      <n-tooltip
+        placement="bottom"
+        :delay="300"
+      >
         <template #trigger>
-          <button class="titlebar-btn" @click="app.toggleTheme()">
+          <button
+            class="icon-btn"
+            @click="open(PROJECT_REPO_URL)"
+          >
+            <n-icon :component="LogoGithub" />
+          </button>
+        </template>
+        GitHub
+      </n-tooltip>
+
+      <n-tooltip
+        placement="bottom"
+        :delay="300"
+      >
+        <template #trigger>
+          <button
+            class="icon-btn"
+            @click="app.toggleTheme()"
+          >
             <n-icon :component="app.isDarkMode ? SunnyOutline : MoonOutline" />
           </button>
         </template>
         {{ app.isDarkMode ? '切换到浅色模式' : '切换到深色模式' }}
       </n-tooltip>
-      <!-- 设置中心 -->
-      <n-tooltip placement="bottom">
-        <template #trigger>
-          <button class="titlebar-btn" @click="router.push('/settings')">
-            <n-icon :component="SettingsOutline" />
-          </button>
-        </template>
-        设置
-      </n-tooltip>
-      <!-- 关于本项目 -->
-      <n-tooltip placement="bottom">
-        <template #trigger>
-          <button class="titlebar-btn" @click="router.push('/about')">
-            <n-icon :component="InformationCircleOutline" />
-          </button>
-        </template>
-        关于
-      </n-tooltip>
-      <!-- 全局任务中心 -->
+
       <TaskCenter />
-      <!-- 窗口控制：贴齐窗口右上角，遵循 Windows 惯例 -->
+
       <div class="win-controls">
-        <button class="win-btn" title="最小化" @click="appService.minimizeWindow()">
+        <button
+          class="win-btn"
+          title="最小化"
+          @click="appService.minimizeWindow()"
+        >
           <n-icon :component="RemoveOutline" />
         </button>
-        <button class="win-btn" :title="isMaximized ? '还原' : '最大化'" @click="toggleMaximize">
+        <button
+          class="win-btn"
+          :title="isMaximized ? '还原' : '最大化'"
+          @click="toggleMaximize"
+        >
           <n-icon :component="isMaximized ? CopyOutline : SquareOutline" />
         </button>
-        <button class="win-btn win-close" title="关闭" @click="appService.closeWindow()">
+        <button
+          class="win-btn win-btn--close"
+          title="关闭"
+          @click="appService.closeWindow()"
+        >
           <n-icon :component="CloseOutline" />
         </button>
       </div>
@@ -103,9 +131,8 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* 标题栏：整条可拖拽，高度 36px，桌面应用标准手感 */
-.app-titlebar {
-  height: 36px;
+.titlebar {
+  height: 38px;
   display: flex;
   align-items: stretch;
   background: var(--bg-secondary);
@@ -113,74 +140,66 @@ onUnmounted(() => {
   flex-shrink: 0;
   user-select: none;
 }
-.titlebar-left {
+
+.titlebar__left {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding-left: 14px;
+  gap: var(--spacing-3);
+  padding-left: var(--spacing-4);
 }
-.brand {
+
+.titlebar__drag {
+  flex: 1;
+}
+
+.titlebar__right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
 }
-.brand-icon {
-  width: 22px;
-  height: 22px;
-  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-hover));
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-on-primary);
-}
-.brand-icon .n-icon { font-size: 14px; }
-.brand-name {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--text-primary);
-}
-/* 权限徽章：紧凑化，与标题栏高度匹配 */
-.status-badge {
+
+/* 权限徽章 */
+.badge {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 8px;
+  padding: 3px 10px;
   background: var(--bg-card);
   border: 1px solid var(--border-primary);
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   color: var(--text-muted);
+  transition: var(--transition-colors);
 }
-.status-badge.admin {
+
+.badge--admin {
   background: var(--color-success-light);
   border-color: var(--color-success);
   color: var(--color-success);
 }
-.status-dot {
+
+.badge__dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--text-muted);
+  transition: var(--transition-colors);
 }
-.status-badge.admin .status-dot {
+
+.badge--admin .badge__dot {
   background: var(--color-success);
-  box-shadow: 0 0 6px var(--color-success);
+  box-shadow: 0 0 8px var(--color-success);
+  animation: pulse 2s ease-in-out infinite;
 }
 
-/* 中间拖拽区：占满剩余空间 */
-.titlebar-spacer { flex: 1; }
-
-.titlebar-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding-right: 0;
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
-/* 标题栏内的小按钮（主题/任务入口容器） */
-.titlebar-btn {
+
+/* 图标按钮 */
+.icon-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -188,24 +207,29 @@ onUnmounted(() => {
   height: 30px;
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: var(--transition-colors);
 }
-.titlebar-btn:hover {
+
+.icon-btn:hover {
   background: var(--bg-card-hover);
   color: var(--text-primary);
 }
-.titlebar-btn .n-icon { font-size: 16px; }
 
-/* 窗口控制按钮组：贴齐右上角，无边距 */
+.icon-btn :deep(.n-icon) {
+  font-size: 16px;
+}
+
+/* 窗口控制 */
 .win-controls {
   display: flex;
   align-items: stretch;
   height: 100%;
-  margin-left: 4px;
+  margin-left: var(--spacing-1);
 }
+
 .win-btn {
   width: 46px;
   display: flex;
@@ -215,15 +239,20 @@ onUnmounted(() => {
   border: none;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: var(--transition-colors);
 }
+
 .win-btn:hover {
   background: var(--bg-card-hover);
   color: var(--text-primary);
 }
-.win-btn.win-close:hover {
+
+.win-btn--close:hover {
   background: var(--color-win-close);
-  color: var(--color-on-primary);
+  color: white;
 }
-.win-btn .n-icon { font-size: 14px; }
+
+.win-btn :deep(.n-icon) {
+  font-size: 14px;
+}
 </style>

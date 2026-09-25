@@ -92,8 +92,8 @@ pub async fn stop_mysql_service(app_handle: AppHandle, service_name: String) -> 
 }
 
 #[tauri::command]
-pub fn get_available_mysql_versions() -> Result<Vec<MySQLVersionInfo>, String> {
-    fetcher::get_available_mysql_versions()
+pub async fn get_available_mysql_versions(app_handle: AppHandle) -> Result<Vec<MySQLVersionInfo>, String> {
+    fetcher::get_available_mysql_versions_async(app_handle).await
 }
 
 #[tauri::command]

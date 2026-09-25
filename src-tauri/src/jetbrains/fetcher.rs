@@ -203,25 +203,40 @@ pub async fn get_jetbrains_product_versions(
     Ok(versions)
 }
 
-/// 拉取单个产品的发行版列表
+/// 拉取单个产品的发行版列表（带重试：应对瞬时网络抖动 / 连接 reset）
 async fn fetch_product_releases(code: &str, latest_only: bool) -> Result<Vec<ApiRelease>, String> {
     let url = releases_api_url(code, latest_only);
-    let resp = http_client::default_client()
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("请求失败: {}", e))?;
+    let max_attempts = 3u32;
+    let mut last_err = String::new();
 
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+    for attempt in 1..=max_attempts {
+        match http_client::default_client().get(&url).send().await {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    last_err = format!("HTTP {}", resp.status());
+                } else {
+                    match resp.json::<ApiReleases>().await {
+                        Ok(mut body) => {
+                            return Ok(body.map.remove(code).unwrap_or_default());
+                        }
+                        Err(e) => {
+                            last_err = format!("解析 JSON 失败: {}", e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                last_err = format!("请求失败: {}", e);
+            }
+        }
+
+        // 非最后一次尝试：指数退避等待（500ms → 1s）
+        if attempt < max_attempts {
+            tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+        }
     }
 
-    let mut body: ApiReleases = resp
-        .json()
-        .await
-        .map_err(|e| format!("解析 JSON 失败: {}", e))?;
-
-    Ok(body.map.remove(code).unwrap_or_default())
+    Err(last_err)
 }
 
 /// 从下载链接中提取文件名（末段）
@@ -231,6 +246,17 @@ fn extract_filename(link: &str) -> String {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .unwrap_or_else(|| "jetbrains-installer.exe".to_string())
+}
+
+/// 将 download.jetbrains.com 入口域名替换为全球 CDN 直连域名。
+/// 原因：入口域名会按来源 IP 302 到地区 CDN（国内为 download-cdn.clf.jetbrains.com.cn），
+/// 新版本发布后地区节点尚未同步文件时会 404；全球 CDN 始终保持完整文件。
+fn cdn_direct_url(link: &str) -> String {
+    link.replacen(
+        "download.jetbrains.com",
+        "download-cdn.jetbrains.com",
+        1,
+    )
 }
 
 /// 下载目录：复用公共路径函数，确保与 Python fetcher / lib.rs 命令一致
@@ -342,7 +368,8 @@ pub async fn download_jetbrains(
         return Err(format!("{} 的 {} 版本下载链接为空", product_code, version));
     }
 
-    let filename = extract_filename(&download.link);
+    let dl_url = cdn_direct_url(&download.link);
+    let filename = extract_filename(&dl_url);
     let download_dir = get_download_dir().await;
     let file_path = download_dir.join(&filename);
 
@@ -351,7 +378,7 @@ pub async fn download_jetbrains(
         &app_handle,
         &window,
         &task_id,
-        &download.link,
+        &dl_url,
         &file_path,
         &version,
         http_client::default_client(),
@@ -373,7 +400,7 @@ pub async fn download_jetbrains(
     // 校验
     if let Err(verify_err) = verify_installer(
         &app_handle,
-        &download.checksum_link,
+        &cdn_direct_url(&download.checksum_link),
         actual_size,
         download.size,
         &hash,

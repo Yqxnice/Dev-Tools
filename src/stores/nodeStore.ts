@@ -1,102 +1,55 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { useLangTool } from '../composables/useLangTool'
 import { nodeService } from '../services/nodeService'
-import { useToolDetection } from '../composables/useToolDetection'
 import type {
   NodeVersion, NodePackage, NpmMirror, AvailableNodeVersion
 } from '../types'
 
 export const useNodeStore = defineStore('node', () => {
-  const cache = useToolDetection<NodeVersion[]>(nodeService, 'node_manager_cache')
+  const tool = useLangTool<NodeVersion, NpmMirror, AvailableNodeVersion>({
+    id: 'node',
+    cacheKey: 'node_manager_cache',
+    downloadPrefix: 'node:',
+    service: nodeService,
+    versionKey: 'executable',
+  })
 
-  // 状态
-  const versions = ref<NodeVersion[]>([])
-  const defaultNode = ref<NodeVersion | null>(null)
-  const selectedVersion = ref<NodeVersion | null>(null)
+  // Node.js 独有状态
   const packages = ref<NodePackage[]>([])
-  const mirrors = ref<NpmMirror[]>([])
-  const availableVersions = ref<AvailableNodeVersion[]>([])
-  // 包列表对应的 node（null = PATH 中的默认 node）
   const packageNodePath = ref<string | null>(null)
 
-  function clearCache(): void {
-    cache.clearCache()
-    versions.value = []
-  }
-
-  async function detectNode(): Promise<NodeVersion[]> {
-    const result = await cache.detect()
-    versions.value = result
-    if (selectedVersion.value) {
-      const matched = result.find(v => v.executable === selectedVersion.value!.executable)
-      selectedVersion.value = matched ?? null
-    }
-    return result
-  }
-
-  async function detectDefaultNode(): Promise<NodeVersion | null> {
-    cache.loading.value = true
-    try {
-      const result = await nodeService.detectDefault()
-      defaultNode.value = result
-      return result
-    } finally {
-      cache.loading.value = false
-    }
-  }
-
   async function loadPackages(): Promise<NodePackage[]> {
-    cache.loading.value = true
+    tool.loading.value = true
     try {
       const result = await nodeService.listPackages(packageNodePath.value)
       packages.value = result
       return result
     } finally {
-      cache.loading.value = false
-    }
-  }
-
-  async function loadMirrors(): Promise<NpmMirror[]> {
-    cache.loading.value = true
-    try {
-      const result = await nodeService.listMirrors()
-      mirrors.value = result
-      return result
-    } finally {
-      cache.loading.value = false
-    }
-  }
-
-  async function switchMirror(mirror: { name: string; url: string }): Promise<void> {
-    cache.loading.value = true
-    try {
-      await nodeService.switchMirror(mirror.name, mirror.url)
-      await loadMirrors()
-    } finally {
-      cache.loading.value = false
-    }
-  }
-
-  async function loadAvailableVersions(): Promise<AvailableNodeVersion[]> {
-    cache.loading.value = true
-    try {
-      const result = await nodeService.getAvailableVersions()
-      availableVersions.value = result
-      return result
-    } finally {
-      cache.loading.value = false
+      tool.loading.value = false
     }
   }
 
   return {
-    // 状态
-    versions, cachedInfo: cache.cachedInfo, defaultNode, selectedVersion,
-    packages, mirrors,
-    availableVersions, packageNodePath,
-    loading: cache.loading,
+    // 从 useLangTool 继承
+    versions: tool.versions,
+    cachedInfo: tool.cachedInfo,
+    defaultNode: tool.defaultVersion,
+    selectedVersion: tool.selectedVersion,
+    packages, packageNodePath,
+    mirrors: tool.mirrors,
+    availableVersions: tool.availableVersions,
+    loading: tool.loading,
+    downloadPrefix: tool.downloadPrefix,
+    formatFileSize: tool.formatFileSize,
     // 方法
-    clearCache, detectNode, detectDefaultNode,
-    loadPackages, loadMirrors, switchMirror,
-    loadAvailableVersions,
+    clearCache: tool.clearCache,
+    detect: tool.detectVersions,
+    detectDefaultNode: tool.detectDefaultVersion,
+    loadPackages,
+    loadMirrors: tool.loadMirrors,
+    switchMirror: tool.switchMirror,
+    loadAvailableVersions: tool.loadAvailableVersions,
+    downloadNodeVersion: tool.downloadVersion,
   }
 })

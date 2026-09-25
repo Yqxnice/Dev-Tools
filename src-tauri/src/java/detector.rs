@@ -1,6 +1,6 @@
 use super::super::{detector_base, logger, process_manager};
 use super::super::types::JavaVersion;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 use std::env;
 use std::path::Path;
@@ -17,7 +17,7 @@ impl detector_base::RuntimeInstance for JavaVersion {
 
 /// 匹配 `java -version` 输出中的版本号
 /// 形如：`openjdk version "17.0.9"`、`java version "1.8.0_381"`、`openjdk version "21.0.5" 2023-10-17`
-static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| {
+static VERSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#""(\d+(?:\.\d+)*(?:[._]\d+)?(?:\+\d+)?)"#).unwrap()
 });
 

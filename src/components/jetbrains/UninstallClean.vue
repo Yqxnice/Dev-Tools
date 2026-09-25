@@ -6,7 +6,7 @@ import { useLoggerStore } from '../../stores/loggerStore'
 import { useAppStore } from '../../stores/appStore'
 import { usePermission } from '../../composables/usePermission'
 import ResidueWorkflow from '../shared/ResidueWorkflow.vue'
-import type { JetBrainsInstallation, JetBrainsResidueScanResult } from '../../types'
+import type { JetBrainsInstallation } from '../../types'
 
 const jb = useJetBrainsStore()
 const log = useLoggerStore()
@@ -19,6 +19,10 @@ const pendingUninstall = ref<JetBrainsInstallation | null>(null)
 const uninstallLoading = ref(false)
 const scanLoading = ref(false)
 const busy = computed(() => uninstallLoading.value || scanLoading.value)
+
+function existsFilter(arr: Array<{ exists: boolean; path?: string }> | undefined) {
+  return arr?.filter(d => d.exists) ?? []
+}
 
 onMounted(async () => {
   log.addLog('info', '========== 检测已安装 JetBrains 产品 ==========')
@@ -86,57 +90,138 @@ async function handleScan() {
 
 <template>
   <ResidueWorkflow
+    v-model:selected="jb.selectedInstallation"
     title="JetBrains 卸载清理"
     description="选择已安装的 IDE，卸载并自动清理配置/缓存残留（不影响其他版本）"
     :instances="jb.installations as JetBrainsInstallation[]"
-    v-model:selected="jb.selectedInstallation"
-    :scan-result="jb.residueScanResult as JetBrainsResidueScanResult | null"
+    :scan-result="jb.residueScanResult"
     :busy="busy"
     :instance-key="(i: JetBrainsInstallation) => `${i.product_name}-${i.version}`"
     empty-text="未检测到已安装的 JetBrains 产品，请先执行版本检测"
   >
     <!-- 实例选择器项 -->
     <template #instance-label="{ inst }">
-      <div class="instance-pick-title">{{ inst.product_name }}</div>
-      <div class="instance-pick-sub">
-        <n-text depth="3" style="font-size:11px">版本: {{ inst.version || '未知' }}</n-text>
-        <n-tag v-if="inst.is_toolbox" type="warning" size="small">Toolbox</n-tag>
+      <div class="instance-pick-title">
+        {{ inst.product_name }}
       </div>
-      <n-text v-if="inst.install_location" depth="3" style="font-size:11px">{{ inst.install_location }}</n-text>
+      <div class="instance-pick-sub">
+        <n-text
+          depth="3"
+          style="font-size:11px"
+        >
+          版本: {{ inst.version || '未知' }}
+        </n-text>
+        <n-tag
+          v-if="inst.is_toolbox"
+          type="warning"
+          size="small"
+        >
+          Toolbox
+        </n-tag>
+      </div>
+      <n-text
+        v-if="inst.install_location"
+        depth="3"
+        style="font-size:11px"
+      >
+        {{ inst.install_location }}
+      </n-text>
     </template>
 
     <!-- 扫描结果 -->
     <template #scan-result="{ result }">
-      <n-text v-if="result.excluded_note" depth="2" style="font-size:12px;display:block;margin-bottom:12px">{{ result.excluded_note }}</n-text>
-      <div v-if="result.config_dirs?.some((d: any) => d.exists)" class="scan-sec">
-        <strong>配置目录 ({{ result.config_dirs.filter((d: any) => d.exists).length }})</strong>
-        <ul class="scan-list"><li v-for="d in result.config_dirs.filter((d: any) => d.exists)" :key="d.path">{{ d.path }}</li></ul>
+      <n-text
+        v-if="result.excluded_note"
+        depth="2"
+        style="font-size:12px;display:block;margin-bottom:12px"
+      >
+        {{ result.excluded_note }}
+      </n-text>
+      <div
+        v-if="result.config_dirs?.some((d: any) => d.exists)"
+        class="scan-sec"
+      >
+        <strong>配置目录 ({{ existsFilter(result.config_dirs).length }})</strong>
+        <ul class="scan-list">
+          <li
+            v-for="d in existsFilter(result.config_dirs)"
+            :key="d.path"
+          >
+            {{ d.path }}
+          </li>
+        </ul>
       </div>
-      <div v-if="result.cache_dirs?.some((d: any) => d.exists)" class="scan-sec">
-        <strong>缓存目录 ({{ result.cache_dirs.filter((d: any) => d.exists).length }})</strong>
-        <ul class="scan-list"><li v-for="d in result.cache_dirs.filter((d: any) => d.exists)" :key="d.path">{{ d.path }}</li></ul>
+      <div
+        v-if="result.cache_dirs?.some((d: any) => d.exists)"
+        class="scan-sec"
+      >
+        <strong>缓存目录 ({{ existsFilter(result.cache_dirs).length }})</strong>
+        <ul class="scan-list">
+          <li
+            v-for="d in existsFilter(result.cache_dirs)"
+            :key="d.path"
+          >
+            {{ d.path }}
+          </li>
+        </ul>
       </div>
-      <div v-if="result.registry_keys?.length" class="scan-sec">
+      <div
+        v-if="result.registry_keys?.length"
+        class="scan-sec"
+      >
         <strong>注册表项 ({{ result.registry_keys.length }})</strong>
-        <ul class="scan-list compact"><li v-for="k in result.registry_keys" :key="k">{{ k }}</li></ul>
+        <ul class="scan-list compact">
+          <li
+            v-for="k in result.registry_keys"
+            :key="k"
+          >
+            {{ k }}
+          </li>
+        </ul>
       </div>
-      <div v-if="result.start_menu_shortcuts?.length" class="scan-sec">
+      <div
+        v-if="result.start_menu_shortcuts?.length"
+        class="scan-sec"
+      >
         <strong>开始菜单快捷方式 ({{ result.start_menu_shortcuts.length }})</strong>
-        <ul class="scan-list compact"><li v-for="p in result.start_menu_shortcuts" :key="p">{{ p }}</li></ul>
+        <ul class="scan-list compact">
+          <li
+            v-for="p in result.start_menu_shortcuts"
+            :key="p"
+          >
+            {{ p }}
+          </li>
+        </ul>
       </div>
-      <n-empty v-if="!result.config_dirs?.some((d: any) => d.exists) && !result.cache_dirs?.some((d: any) => d.exists) && !result.registry_keys?.length && !result.start_menu_shortcuts?.length" description="未发现可清理的残留" />
+      <n-empty
+        v-if="!existsFilter(result.config_dirs).length && !existsFilter(result.cache_dirs).length && !result.registry_keys?.length && !result.start_menu_shortcuts?.length"
+        description="未发现可清理的残留"
+      />
     </template>
 
     <!-- 操作按钮：仅保留"卸载并清理" -->
     <template #actions>
-      <n-button type="error" :disabled="!perm.can('dangerous') || busy" :loading="uninstallLoading"
-        @click="jb.selectedInstallation && requestUninstall(jb.selectedInstallation)">卸载并清理</n-button>
+      <n-button
+        type="error"
+        :disabled="!perm.can('dangerous') || busy"
+        :loading="uninstallLoading"
+        @click="jb.selectedInstallation && requestUninstall(jb.selectedInstallation)"
+      >
+        卸载并清理
+      </n-button>
     </template>
 
     <!-- 确认弹窗 -->
     <template #extra>
-      <n-modal v-model:show="uninstallConfirmVisible" preset="dialog" type="warning" title="确认卸载并清理 JetBrains 产品"
-        positive-text="确认卸载" negative-text="取消" @positive-click="confirmUninstall">
+      <n-modal
+        v-model:show="uninstallConfirmVisible"
+        preset="dialog"
+        type="warning"
+        title="确认卸载并清理 JetBrains 产品"
+        positive-text="确认卸载"
+        negative-text="取消"
+        @positive-click="confirmUninstall"
+      >
         <p>即将卸载 <strong>{{ pendingUninstall?.product_name }}</strong>（版本 {{ pendingUninstall?.version }}）。</p>
         <p>卸载后将自动清理配置/缓存/注册表残留，<strong>用户设置不会自动备份</strong>。</p>
       </n-modal>
@@ -146,8 +231,4 @@ async function handleScan() {
 
 <style scoped>
 .instance-pick-sub { display: flex; align-items: center; gap: 8px; }
-.scan-sec { margin-bottom: 12px; }
-.scan-sec strong { display: block; font-size: 13px; margin-bottom: 4px; }
-.scan-list { margin: 0; padding-left: 18px; font-size: 12px; }
-.scan-list.compact li { word-break: break-all; }
 </style>

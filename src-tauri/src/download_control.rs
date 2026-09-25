@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Window};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use futures_util::StreamExt;
 
 /// 下载任务控制状态：通过 Arc 共享给下载循环和控制命令
@@ -55,8 +55,8 @@ impl DownloadControl {
 }
 
 /// 全局下载任务注册表：task_id -> Arc<DownloadControl>
-static DOWNLOAD_TASKS: Lazy<Mutex<HashMap<String, Arc<DownloadControl>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static DOWNLOAD_TASKS: LazyLock<Mutex<HashMap<String, Arc<DownloadControl>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 注册下载任务，返回控制句柄供下载循环持有
 pub fn register_task(task_id: &str) -> Result<Arc<DownloadControl>, String> {
@@ -494,10 +494,62 @@ pub fn devtools_download_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// 将配置文件备份到下载目录下按版本号命名的子文件夹中。
+///
+/// 备份路径：`{下载根目录}/{version}/{原文件名}.{unix秒}.bak`
+/// 用于密码重置等高风险操作前对核心配置（my.ini / pg_hba.conf 等）留底。
+///
+/// 返回备份文件路径；若源文件不存在则返回 None（不报错，不影响主流程）。
+pub async fn backup_config_to_download_dir(
+    source: &Path,
+    version: &str,
+) -> Option<PathBuf> {
+    if !source.exists() {
+        return None;
+    }
+    let dir = devtools_download_dir().join(version);
+    if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+        eprintln!("[config-backup] 创建备份目录失败 {:?}: {}", dir, e);
+        return None;
+    }
+    let fname = source
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "config".to_string());
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let dest = dir.join(format!("{}.{}.bak", fname, ts));
+    match tokio::fs::copy(source, &dest).await {
+        Ok(_) => Some(dest),
+        Err(e) => {
+            eprintln!("[config-backup] 备份配置文件 {:?} 失败: {}", source, e);
+            None
+        }
+    }
+}
+
 /// DevTools 日志导出目录
 pub fn devtools_log_dir() -> PathBuf {
     dirs::download_dir()
         .map(|d| d.join("DevTools").join("logs"))
         .or_else(|| dirs::cache_dir().map(|d| d.join("DevTools").join("logs")))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// DevTools 环境变量备份目录
+pub fn devtools_env_backup_dir() -> PathBuf {
+    dirs::download_dir()
+        .map(|d| d.join("DevTools").join("env-backups"))
+        .or_else(|| dirs::cache_dir().map(|d| d.join("DevTools").join("env-backups")))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// DevTools 配置导出目录（导入/导出 JSON 文件存放位置）
+pub fn devtools_config_dir() -> PathBuf {
+    dirs::download_dir()
+        .map(|d| d.join("DevTools").join("config"))
+        .or_else(|| dirs::cache_dir().map(|d| d.join("DevTools").join("config")))
         .unwrap_or_else(|| PathBuf::from("."))
 }

@@ -37,16 +37,28 @@ const perm = usePermission()
 
 <template>
   <div class="feature-panel">
-    <n-alert v-if="requireDangerous && !perm.can('dangerous')" type="warning" :bordered="false" class="mb-3">
-      <template #header>需要管理员权限</template>请以管理员身份运行程序后再使用此功能
+    <n-alert
+      v-if="requireDangerous && !perm.can('dangerous')"
+      type="warning"
+      :bordered="false"
+      class="mb-3"
+    >
+      <template #header>
+        需要管理员权限
+      </template>请以管理员身份运行程序后再使用此功能
     </n-alert>
 
     <div class="feature-header">
       <div>
         <h3>{{ title }}</h3>
-        <p v-if="description">{{ description }}</p>
+        <p v-if="description">
+          {{ description }}
+        </p>
       </div>
-      <div v-if="$slots.actions" class="feature-actions">
+      <div
+        v-if="$slots.actions"
+        class="feature-actions"
+      >
         <slot name="actions" />
       </div>
     </div>

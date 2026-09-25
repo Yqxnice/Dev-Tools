@@ -2,7 +2,7 @@ use super::super::{logger, process_manager, service_manager};
 use super::super::detector_base::{self, DbInstance};
 use super::super::types::{PostgresqlInstance, PostgresqlInfo};
 use regex::Regex;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
@@ -24,8 +24,8 @@ impl DbInstance for PostgresqlInstance {
     fn set_is_residual(&mut self, r: bool) { self.is_residual = r; }
 }
 
-static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d+\.\d+)").unwrap());
-static PORT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^\s*port\s*=\s*(\d+)").unwrap());
+static VERSION_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+\.\d+)").unwrap());
+static PORT_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^\s*port\s*=\s*(\d+)").unwrap());
 
 /// 从服务名（如 postgresql-x64-16）提取主版本号
 fn extract_major_from_service_name(service_name: &str) -> Option<String> {

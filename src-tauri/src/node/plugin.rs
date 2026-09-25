@@ -34,6 +34,7 @@ impl ToolPlugin for NodePlugin {
             commands::switch_node_mirror,
             commands::get_available_node_versions,
             commands::get_node_download_url,
+            commands::download_node,
         ])
     }
 
@@ -46,6 +47,7 @@ impl ToolPlugin for NodePlugin {
             "switch_node_mirror",
             "get_available_node_versions",
             "get_node_download_url",
+            "download_node",
         ]
     }
 }

@@ -24,6 +24,7 @@ export interface AppSettings {
 
   // 通用
   autoRefresh: boolean
+  autoCheckUpdate: boolean   // 启动时自动检查应用更新
   skipDangerConfirm: boolean    // 跳过危险操作（卸载/清残留/密码重置）二次确认
 
   // 下载
@@ -38,6 +39,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   themeColor: 'blue',
   customThemeColor: '#3b82f6',
   autoRefresh: true,
+  autoCheckUpdate: true,
   skipDangerConfirm: false,
   autoOpenDownloadFolder: false,
   showLogTimestamps: true,
@@ -82,6 +84,8 @@ export const useAppStore = defineStore('app', () => {
   const isAdmin = ref(false)
   const checkingAdmin = ref(true)
   const globalLoading = ref(false)
+  const sidebarCollapsed = ref(false)
+  const isOnline = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
 
   // 深/浅色模式：由标题栏图标手动切换，持久化到 localStorage
   const isDarkMode = ref(loadDarkMode())
@@ -113,6 +117,12 @@ export const useAppStore = defineStore('app', () => {
     if (settings.value.themeColor === 'custom') applyTheme()
   })
 
+  // 监听网络状态变化
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', () => { isOnline.value = true })
+    window.addEventListener('offline', () => { isOnline.value = false })
+  }
+
   function saveSettings(): void {
     try {
       localStorage.setItem('devtools-settings', JSON.stringify(settings.value))
@@ -125,6 +135,11 @@ export const useAppStore = defineStore('app', () => {
     try {
       localStorage.setItem('devtools-theme', isDarkMode.value ? 'dark' : 'light')
     } catch { /* ignore */ }
+  }
+
+  /** 切换侧边栏折叠/展开 */
+  function toggleSidebar(): void {
+    sidebarCollapsed.value = !sidebarCollapsed.value
   }
 
   async function loadTools(): Promise<void> {
@@ -141,9 +156,9 @@ export const useAppStore = defineStore('app', () => {
   }
 
   return {
-    isAdmin, checkingAdmin, isDarkMode,
-    globalLoading,
+    isAdmin, checkingAdmin, isDarkMode, isOnline,
+    globalLoading, sidebarCollapsed,
     tools, settings, themeColorComputed,
-    loadTools, saveSettings, toggleTheme, applyTheme
+    loadTools, saveSettings, toggleTheme, applyTheme, toggleSidebar
   }
 })

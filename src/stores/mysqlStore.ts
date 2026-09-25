@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { useDbTool, type DbService } from '../composables/useDbTool'
+import { useDbTool } from '../composables/useDbTool'
 import { mysqlService } from '../services/mysqlService'
 import type { MySQLInfo, MySQLInstance, MySQLVersionInfo } from '../types'
 
@@ -8,8 +8,11 @@ export const useMySQLStore = defineStore('mysql', () => {
     id: 'mysql',
     cacheKey: 'mysql_manager_cache',
     downloadPrefix: 'mysql:',
-    service: mysqlService as unknown as DbService<MySQLInstance, MySQLInfo, MySQLVersionInfo>,
+    service: mysqlService,
     cleanRegistryInstallerDefault: true,
-    makeDownloadKey: (version: string, packageType: string) => `${version}-${packageType}`,
+    makeDownloadKey: (version: string, ...extra: unknown[]) => {
+      const packageType = extra[0] as string
+      return `${version}-${packageType}`
+    },
   })
 })

@@ -31,6 +31,7 @@ impl ToolPlugin for JavaPlugin {
             commands::get_java_download_url,
             commands::list_java_mirrors,
             commands::switch_java_mirror,
+            commands::download_java,
         ])
     }
 
@@ -42,6 +43,7 @@ impl ToolPlugin for JavaPlugin {
             "get_java_download_url",
             "list_java_mirrors",
             "switch_java_mirror",
+            "download_java",
         ]
     }
 }

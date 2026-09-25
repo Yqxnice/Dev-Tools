@@ -1,5 +1,5 @@
-use super::super::{download_control, http_client, logger, types::{MySQLVersionInfo, MySQLPackageOption}};
-use once_cell::sync::Lazy;
+use super::super::{download_control, http_client, logger, remote_version_cache, types::{MySQLVersionInfo, MySQLPackageOption}};
+use std::sync::LazyLock;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -12,7 +12,10 @@ const INSTALLER_ARCHIVES_BASE: &str = "https://cdn.mysql.com/archives/mysql-inst
 /// Installer 当前 GA：Downloads/MySQLInstaller/（8.0.46、5.7.44 等仍在 GA 通道）
 const INSTALLER_DOWNLOADS_BASE: &str = "https://cdn.mysql.com/Downloads/MySQLInstaller/";
 
-/// 内置 MySQL 版本清单（编译期嵌入）
+/// 远程版本数据 URL（可后续替换为自有 CDN）
+const REMOTE_VERSIONS_URL: &str = "https://raw.githubusercontent.com/nicepkg/dev-tools/main/src/data/mysql_versions.json";
+
+/// 内置 MySQL 版本清单（编译期嵌入，作为远程拉取失败时的兜底）
 static MYSQL_VERSIONS_JSON: &str = include_str!("../../../src/data/mysql_versions.json");
 
 // ── JSON 数据结构 ──
@@ -37,7 +40,7 @@ struct MysqlVersionCatalog {
 
 /// 解析后的版本目录缓存：JSON 只解析一次，所有查询共享同一份数据。
 /// 避免每次调用 get_available_mysql_versions 时重复解析。
-static CATALOG: Lazy<MysqlVersionCatalog> = Lazy::new(|| {
+static CATALOG: LazyLock<MysqlVersionCatalog> = LazyLock::new(|| {
     serde_json::from_str(MYSQL_VERSIONS_JSON)
         .expect("内置 mysql_versions.json 解析失败（编译期嵌入，不应出错）")
 });
@@ -120,6 +123,27 @@ fn installer_packages(version: &str, use_downloads: bool, offline_only: bool) ->
 // ── 核心：从缓存目录生成 Vec<MySQLVersionInfo> ──
 pub fn get_available_mysql_versions() -> Result<Vec<MySQLVersionInfo>, String> {
     let catalog = &*CATALOG;
+    build_version_list(catalog)
+}
+
+/// 异步版本：优先从远程拉取最新数据，带回缓存和嵌入数据回退
+pub async fn get_available_mysql_versions_async(
+    app_handle: AppHandle,
+) -> Result<Vec<MySQLVersionInfo>, String> {
+    let json_str = remote_version_cache::fetch_version_data(
+        "mysql_versions",
+        REMOTE_VERSIONS_URL,
+        MYSQL_VERSIONS_JSON,
+        &app_handle,
+    )
+    .await;
+
+    let catalog: MysqlVersionCatalog =
+        serde_json::from_str(&json_str).map_err(|e| format!("MySQL 版本数据解析失败: {}", e))?;
+    build_version_list(&catalog)
+}
+
+fn build_version_list(catalog: &MysqlVersionCatalog) -> Result<Vec<MySQLVersionInfo>, String> {
     let dl_set: HashSet<&str> = catalog.downloads_channel.iter().map(|s| s.as_str()).collect();
     let offline_set: HashSet<&str> = catalog.offline_only.iter().map(|s| s.as_str()).collect();
 
@@ -170,7 +194,7 @@ pub async fn download_mysql(
         return Err("版本号或包类型为空".into());
     }
 
-    let available = get_available_mysql_versions()?;
+    let available = get_available_mysql_versions_async(app_handle.clone()).await?;
     let pkg = available
         .iter()
         .find(|v| v.version == version)

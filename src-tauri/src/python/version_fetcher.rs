@@ -1,11 +1,11 @@
 use super::super::{download_control, http_client, logger, types::AvailablePythonVersion};
 use regex::Regex;
 use tauri::AppHandle;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::path::PathBuf;
 
-static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r#"href="(\d+\.\d+\.\d+)/""#).unwrap());
-static STABLE_VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+\.\d+\.\d+$").unwrap());
+static VERSION_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"href="(\d+\.\d+\.\d+)/""#).unwrap());
+static STABLE_VERSION_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.\d+\.\d+$").unwrap());
 
 const MIRRORS: &[(&str, &str)] = &[
     ("华为云", "https://mirrors.huaweicloud.com/python/"),

@@ -138,22 +138,15 @@ pub async fn reset_postgresql_password(
 ) -> Result<String, String> {
     validate_password_strength(&new_password)?;
 
-    logger::info(&app_handle, "========================================");
     logger::info(&app_handle, "开始自动重置 PostgreSQL 密码");
-    logger::info(&app_handle, "========================================");
 
     let pg_info = detector::detect_postgresql(Some(&app_handle)).await?;
-    logger::info(&app_handle, &format!("检测到 {} 个 PostgreSQL 实例", pg_info.instances.len()));
 
     let instance = crate::detector_base::select_valid_instance(
         selected_instance.as_ref(),
         &pg_info.instances,
         "PostgreSQL",
     )?;
-    logger::info(&app_handle, &format!(
-        "使用实例: 版本 {}, 服务 {:?}, 路径 {}",
-        instance.version, instance.service_name, instance.path
-    ));
 
     let service_name = match &instance.service_name {
         Some(name) => name.clone(),
@@ -164,12 +157,8 @@ pub async fn reset_postgresql_password(
     };
     let bin_path = &instance.path;
     let port = resolve_port(instance, override_port);
-    if let Some(p) = port {
-        logger::info(&app_handle, &format!("使用端口: {} ({})", p, if override_port.is_some() { "手动指定" } else { "自动检测" }));
-    }
 
     let psql_path = PathBuf::from(bin_path).join("psql.exe");
-    logger::info(&app_handle, &format!("psql 可执行文件: {:?}", psql_path));
     if !psql_path.exists() {
         logger::error(&app_handle, &format!("未找到 psql.exe: {:?}", psql_path));
         return Err(format!("未找到 psql.exe: {:?}", psql_path));
@@ -202,10 +191,7 @@ pub async fn reset_postgresql_password(
     // 2. 查找并备份 pg_hba.conf
     let pg_hba_path = find_pg_hba_conf(bin_path, instance.data_dir.as_deref()).await;
     let pg_hba_path = match pg_hba_path {
-        Some(p) => {
-            logger::info(&app_handle, &format!("找到 pg_hba.conf: {}", p.display()));
-            p
-        }
+        Some(p) => p,
         None => {
             logger::error(&app_handle, "未找到 pg_hba.conf，无法重置密码");
             let _ = detector::start_postgresql_service(app_handle.clone(), service_name.clone()).await;
@@ -213,14 +199,23 @@ pub async fn reset_postgresql_password(
         }
     };
 
-    // 备份 pg_hba.conf
+    // 备份 pg_hba.conf 到下载目录/{版本号}/ 供用户留底
+    let remote_backup = crate::download_control::backup_config_to_download_dir(
+        &pg_hba_path,
+        &instance.version,
+    )
+    .await;
+    if let Some(p) = remote_backup {
+        logger::info(&app_handle, &format!("pg_hba.conf 已备份至: {}", p.display()));
+    }
+
+    // 同目录临时备份（用于操作后自动恢复）
     let backup_path = pg_hba_path.with_extension("conf.bak.devtools");
     tokio::fs::copy(&pg_hba_path, &backup_path).await
         .map_err(|e| {
             let _ = detector::start_postgresql_service(app_handle.clone(), service_name.clone());
             format!("备份 pg_hba.conf 失败: {}", e)
         })?;
-    logger::info(&app_handle, &format!("已备份 pg_hba.conf 到: {}", backup_path.display()));
 
     let guard = PgHbaGuard {
         backup: Some(backup_path.clone()),
@@ -239,7 +234,6 @@ pub async fn reset_postgresql_password(
             let _ = detector::start_postgresql_service(app_handle.clone(), service_name.clone());
             format!("写入临时 pg_hba.conf 失败: {}", e)
         })?;
-    logger::info(&app_handle, "已写入临时 trust 认证配置");
 
     // 3. 启动服务（加载 trust 配置）
     logger::info(&app_handle, "正在以 trust 认证模式启动 PostgreSQL 服务...");
@@ -270,8 +264,6 @@ pub async fn reset_postgresql_password(
     // 4. 执行 ALTER USER 修改密码
     let escaped = escape_postgresql_password(&new_password);
     let alter_sql = format!("ALTER USER postgres PASSWORD '{}';", escaped);
-    let masked_sql = alter_sql.replace(&escaped, "***");
-    logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_sql));
 
     let psql_str = psql_path.to_str().unwrap_or("");
     let args: Vec<String> = vec![
@@ -286,15 +278,11 @@ pub async fn reset_postgresql_password(
     let mut sql_success = false;
     match result {
         Ok(output) => {
-            logger::info(&app_handle, &format!("SQL 执行退出码: {}", output.exit_code));
             if output.exit_code == 0 {
                 sql_success = true;
                 logger::info(&app_handle, "密码修改 SQL 执行成功！");
             } else {
                 logger::error(&app_handle, &format!("SQL 执行失败: {}", output.stderr));
-            }
-            if !output.stdout.is_empty() {
-                logger::info(&app_handle, &format!("SQL 输出: {}", output.stdout));
             }
         }
         Err(e) => {
@@ -342,7 +330,6 @@ pub async fn reset_postgresql_password(
 
     let mut connection_ok = false;
     for retry in 1..=5u32 {
-        logger::info(&app_handle, &format!("连接测试尝试 {}/5...", retry));
         let mut cmd = tokio::process::Command::new(psql_str);
         cmd.args(["-U", "postgres", "-h", "127.0.0.1", "-p", &port_str, "-c", "SELECT 1;"]);
         cmd.env("PGPASSWORD", &new_password);
@@ -371,19 +358,13 @@ pub async fn reset_postgresql_password(
     }
 
     if sql_success && connection_ok {
-        logger::info(&app_handle, "========================================");
         logger::info(&app_handle, "密码重置成功！连接测试通过！");
-        logger::info(&app_handle, "========================================");
         Ok("密码重置成功，连接测试通过！".to_string())
     } else if sql_success {
-        logger::warn(&app_handle, "========================================");
         logger::warn(&app_handle, "连接测试失败，但密码可能已成功设置！");
-        logger::warn(&app_handle, "========================================");
         Ok("密码可能已成功设置！虽然连接测试失败，但 SQL 命令执行成功。请尝试手动连接。".to_string())
     } else {
-        logger::error(&app_handle, "========================================");
         logger::error(&app_handle, "密码重置失败！SQL 执行未通过");
-        logger::error(&app_handle, "========================================");
         Err("密码重置失败，SQL 执行未通过，请查看日志获取详细信息".to_string())
     }
 }

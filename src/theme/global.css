@@ -1,89 +1,274 @@
 /* ============================================================================
- * 全局样式
+ * 全局样式 — 设计系统 v2
  *
- * 颜色变量（--color-* / --bg-* / --text-* / --border-* / --shadow-* / --scrollbar-*）
- * 不再在本文件定义，统一由 src/theme/tokens.ts 的 applyCssTokens() 在运行时注入，
- * 作为整个应用颜色的单一事实源。
- *
- * 本文件只保留：
- *   1. 非颜色设计 token（spacing / radius / duration / ease / font-mono）
+ * 颜色变量由 src/theme/tokens.ts 的 applyCssTokens() 在运行时注入。
+ * 本文件定义：
+ *   1. 非颜色设计 token（spacing / radius / duration / ease / font / z-index）
  *   2. CSS reset 与全局结构样式
- *   3. 滚动条、焦点、按钮反馈等通用交互样式
- *   4. 首屏 fallback 底色（JS 注入前的极短瞬间，避免白屏）
+ *   3. 通用排版系统（type scale）
+ *   4. 滚动条、焦点、按钮反馈等通用交互样式
+ *   5. 首屏 fallback 底色
  * ========================================================================== */
 
 :root {
-  /* ===== 间距 ===== */
-  --spacing-xs: 4px; --spacing-sm: 8px; --spacing-md: 12px;
-  --spacing-lg: 16px; --spacing-xl: 24px; --spacing-2xl: 32px;
+  /* ===== 排版系统 ===== */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', Consolas, monospace;
 
-  /* ===== 圆角 ===== */
-  --radius-sm: 6px; --radius-md: 8px; --radius-lg: 12px; --radius-xl: 16px;
+  /* 字号阶梯（Type Scale） */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --text-3xl: 28px;
 
-  /* ===== 时长分级:微交互 / 标准 / 过渡 / 装饰 ===== */
-  --duration-instant: 100ms;
-  --duration-fast: 150ms;
+  /* 行高 */
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+
+  /* 字重 */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* 字间距 */
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+
+  /* ===== 间距系统 ===== */
+  --spacing-0: 0;
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-16: 64px;
+
+  /* ===== 圆角系统 ===== */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-full: 9999px;
+
+  /* ===== 时长分级 ===== */
+  --duration-instant: 80ms;
+  --duration-fast: 120ms;
   --duration-normal: 200ms;
-  --duration-slow: 300ms;
+  --duration-slow: 320ms;
+  --duration-slower: 480ms;
 
-  /* ===== 物理缓动曲线 ===== */
+  /* ===== 缓动曲线 ===== */
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);
   --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-bounce: cubic-bezier(0.68, -0.6, 0.32, 1.6);
 
-  /* 向后兼容:旧名映射到新分级 */
-  --transition-fast: var(--duration-fast) var(--ease-standard);
-  --transition-normal: var(--duration-normal) var(--ease-standard);
+  /* 组合过渡 */
+  --transition-colors: color var(--duration-fast) var(--ease-standard),
+                        background-color var(--duration-fast) var(--ease-standard),
+                        border-color var(--duration-fast) var(--ease-standard),
+                        box-shadow var(--duration-fast) var(--ease-standard);
+  --transition-transform: transform var(--duration-fast) var(--ease-spring);
+  --transition-all: all var(--duration-normal) var(--ease-standard);
 
-  /* 等宽字体栈:路径/版本号/日志统一 */
-  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, 'SF Mono', 'Microsoft YaHei UI', monospace;
+  /* ===== z-index 层级 ===== */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-overlay: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+
+  /* ===== 容器宽度 ===== */
+  --container-sm: 640px;
+  --container-md: 768px;
+  --container-lg: 960px;
+  --container-xl: 1120px;
+  --container-2xl: 1280px;
 }
 
+/* ===== CSS Reset ===== */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body, #app {
   height: 100vh; width: 100vw; overflow: hidden;
 }
 
-/* 首屏 fallback：JS 注入颜色变量前的极短瞬间使用深色，避免白屏闪烁。
-   窗口在 App.vue onMounted 后才 showWindow()，实际几乎不可见。 */
+/* 首屏 fallback：JS 注入颜色变量前使用深色，避免白屏闪烁 */
 html, body {
-  background: #0a0a0f;
-  color: #f1f5f9;
+  background: #0f1019;
+  color: #e2e5ef;
 }
 
 body {
-  font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
   background: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* 主题切换平滑过渡,避免深浅模式切换闪烁 */
   transition: background-color var(--duration-slow) var(--ease-standard),
               color var(--duration-slow) var(--ease-standard);
 }
 
+/* ===== 滚动条 ===== */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-full);
+}
 ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
 * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
 
-/* 文本选区：跟随主色 */
+/* ===== 文本选区 ===== */
 ::selection {
   background: var(--color-primary-light);
   color: var(--text-primary);
 }
 
-/* 键盘焦点可见性 */
-button:focus-visible, .n-button:focus-visible, [role="button"]:focus-visible {
+/* ===== 键盘焦点 ===== */
+:focus-visible {
   outline: 2px solid var(--color-primary);
-  outline-offset: 1px;
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
-/* 全局按钮按下反馈:scale + 弹性曲线,增强桌面感 */
-.n-button:not(:disabled):active {
+/* ===== 通用排版 ===== */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text-primary);
+}
+
+code, kbd, pre, samp {
+  font-family: var(--font-mono);
+}
+
+/* ===== 全局按钮按下反馈 ===== */
+button:not(:disabled):active {
   transform: scale(0.97);
   transition: transform var(--duration-instant) var(--ease-spring);
+}
+
+/* ===== 工具类 ===== */
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ===== Vue 过渡动画 ===== */
+
+/* 淡入淡出 + 位移 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* 从下方滑入 */
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: opacity var(--duration-fast) var(--ease-standard),
+              transform var(--duration-fast) var(--ease-standard);
+}
+.slide-up-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.slide-up-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* 从右侧滑入 */
+.slide-right-enter-active,
+.slide-right-leave-active {
+  transition: opacity var(--duration-fast) var(--ease-standard),
+              transform var(--duration-fast) var(--ease-standard);
+}
+.slide-right-enter-from {
+  opacity: 0;
+  transform: translateX(-8px);
+}
+.slide-right-leave-to {
+  opacity: 0;
+  transform: translateX(8px);
+}
+
+/* 缩放弹入 */
+.scale-enter-active {
+  transition: opacity var(--duration-fast) var(--ease-standard),
+              transform var(--duration-fast) var(--ease-spring);
+}
+.scale-leave-active {
+  transition: opacity var(--duration-fast) var(--ease-standard),
+              transform var(--duration-fast) var(--ease-standard);
+}
+.scale-enter-from {
+  opacity: 0;
+  transform: scale(0.95);
+}
+.scale-leave-to {
+  opacity: 0;
+  transform: scale(0.95);
+}
+
+/* 折叠展开 */
+.collapse-enter-active,
+.collapse-leave-active {
+  transition: max-height var(--duration-normal) var(--ease-standard),
+              opacity var(--duration-normal) var(--ease-standard);
+  overflow: hidden;
+}
+.collapse-enter-from,
+.collapse-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
+.collapse-enter-to,
+.collapse-leave-from {
+  max-height: 500px;
+  opacity: 1;
+}
+
+/* Tooltip：浅色模式黑底白字，深色模式白底黑字 */
+.n-tooltip {
+  --n-color: var(--text-primary) !important;
+  --n-text-color: var(--bg-primary) !important;
+  --n-border-color: var(--text-primary) !important;
 }

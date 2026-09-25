@@ -23,17 +23,15 @@ const emptyText = computed(() => {
 
 onMounted(() => {
   if (node.versions.length === 0) {
-    node.detectNode().catch(e => log.addLog('warn', `检测 Node 版本失败: ${e}`))
+    node.detect().catch(e => log.addLog('warn', `检测 Node 版本失败: ${e}`))
   }
 })
 
 async function handleRefresh() {
   loadError.value = ''
   node.packages = []
-  log.addLog('info', '开始加载已安装的全局 npm 包...')
   try {
-    const result = await node.loadPackages()
-    log.addLog('info', `加载完成，发现 ${result.length} 个全局包`)
+    await node.loadPackages()
   } catch (e) {
     loadError.value = `加载失败：${e}（可能未安装 Node.js 或 npm）`
     log.addLog('error', `加载失败: ${e}`)
@@ -51,30 +49,49 @@ async function handleRefresh() {
     @refresh="handleRefresh"
   >
     <template #actions>
-      <n-button type="primary" :loading="node.loading" @click="handleRefresh">
+      <n-button
+        type="primary"
+        :loading="node.loading"
+        @click="handleRefresh"
+      >
         {{ node.loading ? '加载中...' : '查看全局包' }}
       </n-button>
     </template>
 
     <template #toolbar>
-      <div v-if="node.packages.length > 0" class="pkg-toolbar">
-        <n-input v-model:value="keyword" size="small" clearable placeholder="搜索包名..." />
-        <n-tag type="info" size="small">{{ filteredPackages.length }} / {{ node.packages.length }}</n-tag>
+      <div
+        v-if="node.packages.length > 0"
+        class="pkg-toolbar"
+      >
+        <n-input
+          v-model:value="keyword"
+          size="small"
+          clearable
+          placeholder="搜索包名..."
+        />
+        <n-tag
+          type="info"
+          size="small"
+        >
+          {{ filteredPackages.length }} / {{ node.packages.length }}
+        </n-tag>
       </div>
     </template>
 
     <template #row="{ item: pkg }">
       <div class="pkg-row">
         <span class="pkg-name">{{ pkg.name }}</span>
-        <n-tag size="small" :bordered="false">{{ pkg.version }}</n-tag>
+        <n-tag
+          size="small"
+          :bordered="false"
+        >
+          {{ pkg.version }}
+        </n-tag>
       </div>
     </template>
   </FlatTablePanel>
 </template>
 
 <style scoped>
-.pkg-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.pkg-toolbar .n-input { max-width: 240px; }
-.pkg-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; background: var(--bg-card); border: 1px solid var(--border-primary); border-radius: 6px; }
-.pkg-name { font-size: 13px; font-weight: 500; word-break: break-all; }
+/* 样式来自 feature-common.css 的 .pkg-toolbar / .pkg-row / .pkg-name */
 </style>

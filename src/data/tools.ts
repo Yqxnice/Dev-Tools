@@ -96,6 +96,14 @@ export const TOOLS: ToolMeta[] = [
       { id: 'mirror', name: 'Maven 镜像', icon: 'globe', component: 'java/MavenMirror.vue', title: 'Maven 镜像' },
     ],
   },
+    {
+    id: 'env',
+    name: '环境变量',
+    icon: 'terminal',
+    features: [
+      { id: 'paths', name: 'PATH 管理', icon: 'check-circle', component: 'env/EnvManager.vue', title: '环境变量管理' },
+    ],
+  },
   {
     id: 'software',
     name: '软件',
@@ -105,6 +113,7 @@ export const TOOLS: ToolMeta[] = [
       { id: 'tutorials', name: '教程', icon: 'globe', component: 'software/Tutorials.vue', title: '教程' },
     ],
   },
+
 ]
 
 /** 派生为 Record<id, ToolInfo> 供 appStore 用作 fallback */

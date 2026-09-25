@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NButton, NTag, NCard } from 'naive-ui'
+import { NTag, NCard } from 'naive-ui'
 import { usePythonStore } from '../../stores/pythonStore'
 import { useLoggerStore } from '../../stores/loggerStore'
 import FlatTablePanel from '../shared/FlatTablePanel.vue'
@@ -8,10 +8,8 @@ const py = usePythonStore()
 const log = useLoggerStore()
 
 async function handleRefresh() {
-  log.addLog('info', '开始加载 Python 环境...')
   try {
-    const result = await py.loadEnvs()
-    log.addLog('info', `加载完成，发现 ${result.length} 个 Python 环境`)
+    await py.loadEnvs()
   } catch (e) { log.addLog('error', `加载失败: ${e}`) }
 }
 </script>
@@ -25,25 +23,45 @@ async function handleRefresh() {
     empty-text="未检测到 Python 环境"
     @refresh="handleRefresh"
   >
-    <template #actions>
-      <n-button type="primary" :loading="py.loading" @click="handleRefresh">
-        {{ py.loading ? '刷新中...' : '刷新列表' }}
-      </n-button>
-    </template>
-
     <template #toolbar>
-      <div v-if="py.envs.length > 0" class="section-label">
+      <div
+        v-if="py.envs.length > 0"
+        class="section-label"
+      >
         <span>环境列表</span>
-        <n-tag type="info" size="small">{{ py.envs.length }} 个环境</n-tag>
+        <n-tag
+          type="info"
+          size="small"
+        >
+          {{ py.envs.length }} 个环境
+        </n-tag>
       </div>
     </template>
 
     <template #row="{ item: env }">
-      <n-card :title="env.name" :bordered="true" size="small">
-        <template #header-extra><n-tag type="success" size="small">{{ env.env_type }}</n-tag></template>
+      <n-card
+        :title="env.name"
+        :bordered="true"
+        size="small"
+      >
+        <template #header-extra>
+          <n-tag
+            type="success"
+            size="small"
+          >
+            {{ env.env_type }}
+          </n-tag>
+        </template>
         <div class="detail-grid">
-          <div class="detail-item detail-item-full"><span class="detail-label">路径</span><span class="detail-value detail-path">{{ env.path }}</span></div>
-          <div v-if="env.python_version" class="detail-item"><span class="detail-label">Python 版本</span><span class="detail-value">{{ env.python_version }}</span></div>
+          <div class="detail-item detail-item-full">
+            <span class="detail-label">路径</span><span class="detail-value detail-path">{{ env.path }}</span>
+          </div>
+          <div
+            v-if="env.python_version"
+            class="detail-item"
+          >
+            <span class="detail-label">Python 版本</span><span class="detail-value">{{ env.python_version }}</span>
+          </div>
         </div>
       </n-card>
     </template>

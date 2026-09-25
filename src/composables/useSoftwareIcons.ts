@@ -8,21 +8,31 @@ interface SoftwareItem {
   url: string
 }
 
-/** 第三方 favicon 聚合服务（按顺序降级）：
- * 1. favicon.im —— Cloudflare，解析站点真实图标
- * 2. iowen —— 国内服务，备选
- * 均失败后由后端抓取官网 HTML 本地解析 */
+/** 图标调试日志开关：由 .env 的 VITE_ICON_DEBUG 控制 */
+const ICON_DEBUG = import.meta.env.VITE_ICON_DEBUG === 'true'
+
+/** 控制台输出图标解析过程（仅 ICON_DEBUG=true 时生效） */
+function iconLog(name: string, stage: string, msg: string): void {
+  if (ICON_DEBUG) console.debug(`[icon] ${name} @ ${stage}: ${msg}`)
+}
+
+/** 图标探测链（按顺序降级）：
+ * 1. {origin}/favicon.ico —— 直连目标站，几 KB，无第三方依赖
+ * 2. favicon.im —— Cloudflare 缓存，备选
+ * 3. iowen —— 国内服务，备选
+ * 全部失败后由后端抓取官网 HTML 本地解析 */
 const FAVICON_PROVIDERS: ((host: string) => string)[] = [
+  host => `https://${host}/favicon.ico`,
   host => `https://favicon.im/${host}?larger=true`,
   host => `https://api.iowen.cn/favicon/${host}.png`,
 ]
 
-/** 第三方服务数量：stage 达到此值表示进入后端解析阶段（供组件区分渲染错误来源） */
+/** 第三方服务数量：stage 达到此值表示进入后端解析阶段 */
 export const FAVICON_PROVIDER_COUNT = FAVICON_PROVIDERS.length
 
-/** 单个第三方图标探测超时：服务不可达时 Image 的 error 通常很快触发，
+/** 单个图标探测超时：服务不可达时 Image 的 error 通常很快触发，
  * 但黑洞场景永不回调，需要超时兜底 */
-const PROBE_TIMEOUT_MS = 8000
+const PROBE_TIMEOUT_MS = 5000
 
 type IconStage = number // 0..N-1 第三方；N = 后端 data URI
 
@@ -51,7 +61,8 @@ function ensureState(item: SoftwareItem): IconState {
       src: host ? FAVICON_PROVIDERS[0](host) : '',
       stage: 0,
       failed: !host,
-      resolving: false,
+      // 初始为 true：模板先渲染首字母占位，探测成功后才切换为 <img>
+      resolving: true,
     }
   }
   return states[item.name]
@@ -76,33 +87,49 @@ function probeImage(src: string): Promise<boolean> {
   })
 }
 
-/** 单个条目的完整降级链：第三方1 → 第三方2 → 后端本地解析 → 失败（首字母） */
+/** 单个条目的完整降级链：
+ * favicon.ico → favicon.im → iowen → 后端 HTML 解析 → 失败（首字母）
+ * 初始 resolving=true（首字母占位），探测成功后 resolving=false（切换为 <img>） */
 async function resolveItem(item: SoftwareItem): Promise<void> {
   const state = ensureState(item)
   if (state.failed || state.stage >= FAVICON_PROVIDERS.length) return
 
+  const host = getHost(item.url)
+
+  // 阶段 1-N：前端 favicon 探测链
   for (let i = state.stage; i < FAVICON_PROVIDERS.length; i++) {
-    const host = getHost(item.url)
     if (!host) break
     const url = FAVICON_PROVIDERS[i](host)
+    const stageName = i === 0 ? 'favicon.ico' : i === 1 ? 'favicon.im' : 'iowen'
     state.stage = i
     state.src = url
-    if (await probeImage(url)) return
+    iconLog(item.name, stageName, `探测 ${url}`)
+    const ok = await probeImage(url)
+    if (ok) {
+      iconLog(item.name, stageName, '成功')
+      state.resolving = false
+      return
+    }
+    iconLog(item.name, stageName, '失败')
   }
 
-  // 第三方全部失败：后端抓取官网 HTML 解析图标（期间首字母占位）
+  // 前端全部失败：后端抓取官网 HTML 解析图标（期间首字母占位）
   state.stage = FAVICON_PROVIDERS.length
   state.resolving = true
   state.src = ''
+  iconLog(item.name, 'backend', '开始后端 HTML 解析')
   try {
     const dataUri = await resolveSoftwareIcon(item.url)
     if (dataUri) {
-      // 必须先复位 resolving，否则模板 v-if="!resolving" 永远不渲染 <img>
+      iconLog(item.name, 'backend', '成功')
       state.resolving = false
       state.src = dataUri
       return
     }
-  } catch { /* 忽略，进入最终降级 */ }
+    iconLog(item.name, 'backend', '返回 None')
+  } catch (e) {
+    iconLog(item.name, 'backend', `异常: ${e}`)
+  }
   state.resolving = false
   state.failed = true
 }
@@ -126,9 +153,9 @@ export function prefetchSoftwareIcons(): void {
   if (started) return
   started = true
   const items = softwareData.items as SoftwareItem[]
-  // 先初始化全部状态（组件即使早于预取挂载也能立即渲染首条候选 URL）
+  // 先初始化全部状态（组件即使早于预取挂载也能立即渲染首字母占位）
   items.forEach(ensureState)
-  void runWithConcurrency(items, 4, resolveItem)
+  void runWithConcurrency(items, 8, resolveItem)
 }
 
 /** 组件读取图标状态的入口（顺带兜底启动预取，防初始化流程遗漏） */

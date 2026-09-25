@@ -2,7 +2,7 @@ use super::super::{logger, process_manager, service_manager};
 use super::super::detector_base::{self, DbInstance};
 use super::super::types::{MySQLInstance, MySQLInfo};
 use regex::Regex;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
@@ -23,9 +23,9 @@ impl DbInstance for MySQLInstance {
     fn set_is_residual(&mut self, r: bool) { self.is_residual = r; }
 }
 
-static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(\d+\.\d+\.\d+)").unwrap());
-static PORT_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^port\s*=\s*(\d+)").unwrap());
-static DEFAULTS_FILE_REGEX: Lazy<Regex> = Lazy::new(|| {
+static VERSION_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d+\.\d+\.\d+)").unwrap());
+static PORT_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^port\s*=\s*(\d+)").unwrap());
+static DEFAULTS_FILE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)--defaults-file=(?:"([^"]+)"|([^\s"]+))"#).unwrap()
 });
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { NButton, NTag, NCard } from 'naive-ui'
+import { NTag, NCard } from 'naive-ui'
 import { useNodeStore } from '../../stores/nodeStore'
 import { useLoggerStore } from '../../stores/loggerStore'
 import FlatTablePanel from '../shared/FlatTablePanel.vue'
@@ -26,10 +26,8 @@ onMounted(() => {
 })
 
 async function handleRefresh() {
-  log.addLog('info', '开始加载 Node.js 环境...')
   try {
-    const result = await node.detectNode()
-    log.addLog('info', `加载完成，发现 ${result.length} 个 Node.js 环境`)
+    await node.detect()
   } catch (e) { log.addLog('error', `加载失败: ${e}`) }
 }
 </script>
@@ -43,23 +41,34 @@ async function handleRefresh() {
     empty-text="未检测到 Node.js 环境"
     @refresh="handleRefresh"
   >
-    <template #actions>
-      <n-button type="primary" :loading="node.loading" @click="handleRefresh">
-        {{ node.loading ? '刷新中...' : '刷新列表' }}
-      </n-button>
-    </template>
-
     <template #toolbar>
-      <div v-if="node.versions.length > 0" class="section-label">
+      <div
+        v-if="node.versions.length > 0"
+        class="section-label"
+      >
         <span>环境列表</span>
-        <n-tag type="info" size="small">{{ node.versions.length }} 个环境</n-tag>
+        <n-tag
+          type="info"
+          size="small"
+        >
+          {{ node.versions.length }} 个环境
+        </n-tag>
       </div>
     </template>
 
     <template #row="{ item: env }">
-      <n-card :title="`Node.js ${env.version}`" :bordered="true" size="small">
+      <n-card
+        :title="`Node.js ${env.version}`"
+        :bordered="true"
+        size="small"
+      >
         <template #header-extra>
-          <n-tag type="success" size="small">{{ managerLabel(env.manager) }}</n-tag>
+          <n-tag
+            type="success"
+            size="small"
+          >
+            {{ managerLabel(env.manager) }}
+          </n-tag>
         </template>
         <div class="detail-grid">
           <div class="detail-item detail-item-full">
@@ -77,11 +86,5 @@ async function handleRefresh() {
 </template>
 
 <style scoped>
-.section-label { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-.detail-grid { display: flex; flex-direction: column; gap: 8px; }
-.detail-item { display: flex; gap: 12px; font-size: 13px; align-items: baseline; }
-.detail-item-full { flex-direction: column; gap: 4px; }
-.detail-label { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
-.detail-value { color: var(--text-primary); }
-.detail-path { font-family: var(--font-mono); font-size: 12px; word-break: break-all; background: var(--bg-card); padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border-primary); }
+/* 样式来自 feature-common.css 的 .section-label / .detail-grid / .detail-item / .detail-path */
 </style>

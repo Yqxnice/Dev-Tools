@@ -1,7 +1,7 @@
 use super::super::{detector_base, logger, process_manager};
 use super::super::types::NodeVersion;
 use regex::Regex;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use std::path::Path;
 use std::env;
 use tauri::AppHandle;
@@ -15,8 +15,8 @@ impl detector_base::RuntimeInstance for NodeVersion {
     fn set_status(&mut self, s: String) { self.status = s; }
 }
 
-static VERSION_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"v?(\d+\.\d+\.\d+)").unwrap());
+static VERSION_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"v?(\d+\.\d+\.\d+)").unwrap());
 
 fn parse_version(output: &str) -> Option<String> {
     let trimmed = output.trim();

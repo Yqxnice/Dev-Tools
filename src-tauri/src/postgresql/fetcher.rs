@@ -1,12 +1,15 @@
-use super::super::{download_control, http_client, logger, types::{PostgresqlVersionInfo}};
-use once_cell::sync::Lazy;
+use super::super::{download_control, http_client, logger, remote_version_cache, types::{PostgresqlVersionInfo}};
+use std::sync::LazyLock;
 use std::path::PathBuf;
 use tauri::AppHandle;
 
 /// EnterpriseDB 安装器下载基址
 const POSTGRESQL_INSTALLER_BASE: &str = "https://get.enterprisedb.com/postgresql/";
 
-/// 内置 PostgreSQL 版本号列表（编译期嵌入 JSON，零网络依赖）
+/// 远程版本数据 URL
+const REMOTE_VERSIONS_URL: &str = "https://raw.githubusercontent.com/nicepkg/dev-tools/main/src/data/postgresql_versions.json";
+
+/// 内置 PostgreSQL 版本号列表（编译期嵌入 JSON，作为远程拉取失败时的兜底）
 static POSTGRESQL_VERSIONS_JSON: &str = include_str!("../../../src/data/postgresql_versions.json");
 
 /// 内置版本清单：versions 为字符串数组，每项格式 "version-build"（如 "16.15-3"）
@@ -16,7 +19,7 @@ struct PostgresVersionCatalog {
 }
 
 /// 解析后的版本目录缓存：JSON 只解析一次
-static CATALOG: Lazy<PostgresVersionCatalog> = Lazy::new(|| {
+static CATALOG: LazyLock<PostgresVersionCatalog> = LazyLock::new(|| {
     serde_json::from_str(POSTGRESQL_VERSIONS_JSON)
         .expect("内置 postgresql_versions.json 解析失败（编译期嵌入，不应出错）")
 });
@@ -28,7 +31,29 @@ fn build_download_link(version_build: &str) -> String {
 
 /// 从缓存目录生成版本信息列表
 pub fn get_available_postgresql_versions() -> Result<Vec<PostgresqlVersionInfo>, String> {
-    let result = CATALOG
+    let catalog = &*CATALOG;
+    build_version_list(catalog)
+}
+
+/// 异步版本：优先从远程拉取最新数据，带回缓存和嵌入数据回退
+pub async fn get_available_postgresql_versions_async(
+    app_handle: AppHandle,
+) -> Result<Vec<PostgresqlVersionInfo>, String> {
+    let json_str = remote_version_cache::fetch_version_data(
+        "postgresql_versions",
+        REMOTE_VERSIONS_URL,
+        POSTGRESQL_VERSIONS_JSON,
+        &app_handle,
+    )
+    .await;
+
+    let catalog: PostgresVersionCatalog = serde_json::from_str(&json_str)
+        .map_err(|e| format!("PostgreSQL 版本数据解析失败: {}", e))?;
+    build_version_list(&catalog)
+}
+
+fn build_version_list(catalog: &PostgresVersionCatalog) -> Result<Vec<PostgresqlVersionInfo>, String> {
+    let result = catalog
         .versions
         .iter()
         .map(|v| PostgresqlVersionInfo {
@@ -67,7 +92,7 @@ pub async fn download_postgresql(
     }
 
     // 校验版本号是否在内置列表中
-    let available = get_available_postgresql_versions()?;
+    let available = get_available_postgresql_versions_async(app_handle.clone()).await?;
     if !available.iter().any(|v| v.version == version) {
         return Err(format!("未找到 PostgreSQL {} 版本", version));
     }

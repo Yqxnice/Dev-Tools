@@ -1,9 +1,10 @@
-use super::super::{http_client, logger, types::AvailableNodeVersion};
+use super::super::{download_control, http_client, logger, types::AvailableNodeVersion};
 use regex::Regex;
+use std::path::PathBuf;
 use tauri::AppHandle;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 
-static VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+\.\d+\.\d+$").unwrap());
+static VERSION_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+\.\d+\.\d+$").unwrap());
 
 /// 镜像源列表，按顺序尝试
 const MIRRORS: &[(&str, &str)] = &[
@@ -131,6 +132,58 @@ pub fn get_download_url(version: &str) -> String {
         "https://registry.npmmirror.com/-/binary/node/v{}/node-v{}-{}.msi",
         version, version, arch
     )
+}
+
+/// 下载目录：复用公共路径函数
+async fn get_download_dir() -> PathBuf {
+    let dir = download_control::devtools_download_dir();
+    let _ = tokio::fs::create_dir_all(&dir).await;
+    dir
+}
+
+/// 下载 Node.js 安装包并返回文件路径
+pub async fn download_node(
+    app_handle: AppHandle,
+    version: String,
+    window: tauri::Window,
+) -> Result<PathBuf, String> {
+    validate_version_string(&version)?;
+    let task_id = format!("node:{}", version);
+    let download_url = get_download_url(&version);
+    logger::info(&app_handle, &format!("开始下载 Node.js {}", version));
+
+    let arch = get_system_architecture();
+    let download_dir = get_download_dir().await;
+    let file_path = download_dir.join(format!("node-v{}-{}.msi", version, arch));
+
+    let (actual_size, declared_size) = download_control::download_file(
+        &app_handle,
+        &window,
+        &task_id,
+        &download_url,
+        &file_path,
+        &version,
+        http_client::default_client(),
+        3,
+    )
+    .await?;
+
+    download_control::emit_completed(&window, &task_id, &version, actual_size, declared_size);
+    logger::info(
+        &app_handle,
+        &format!("下载完成: {}（{} 字节）", file_path.display(), actual_size),
+    );
+    Ok(file_path)
+}
+
+/// 只下载 Node.js 安装包，返回路径字符串
+pub async fn download_node_only(
+    app_handle: AppHandle,
+    version: String,
+    window: tauri::Window,
+) -> Result<String, String> {
+    let installer_path = download_node(app_handle, version, window).await?;
+    Ok(installer_path.to_str().unwrap_or("").to_string())
 }
 
 #[cfg(test)]

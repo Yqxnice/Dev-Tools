@@ -30,7 +30,12 @@ const toolRoutes: RouteRecordRaw[] = TOOLS.flatMap(tool =>
 )
 
 const routes: RouteRecordRaw[] = [
-  { path: '/', redirect: '/mysql/instances' },
+  {
+    path: '/',
+    name: 'home',
+    component: () => import('../components/Home.vue'),
+    meta: { title: '首页' },
+  },
   ...toolRoutes,
   {
     path: '/settings',
@@ -44,7 +49,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../components/About.vue'),
     meta: { title: '关于' },
   },
-  { path: '/:pathMatch(.*)*', redirect: '/mysql/instances' },
+  {
+    path: '/downloads',
+    name: 'downloads',
+    component: () => import('../components/downloads/DownloadCenter.vue'),
+    meta: { title: '下载中心' },
+  },
+  { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
 export const router = createRouter({

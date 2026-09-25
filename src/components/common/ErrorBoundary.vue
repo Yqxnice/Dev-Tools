@@ -38,11 +38,23 @@ function reset() {
 </script>
 
 <template>
-  <div v-if="error" class="error-boundary">
-    <n-result status="error" title="页面发生异常" :description="error.message">
+  <div
+    v-if="error"
+    class="error-boundary"
+  >
+    <n-result
+      status="error"
+      title="页面发生异常"
+      :description="error.message"
+    >
       <template #footer>
         <div class="error-actions">
-          <n-button size="small" @click="reset">重试</n-button>
+          <n-button
+            size="small"
+            @click="reset"
+          >
+            重试
+          </n-button>
           <span class="error-time">发生时间:{{ error.timestamp }}</span>
         </div>
       </template>
@@ -58,16 +70,16 @@ function reset() {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px;
+  padding: var(--spacing-8);
 }
 .error-actions {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--spacing-3);
 }
 .error-time {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 </style>

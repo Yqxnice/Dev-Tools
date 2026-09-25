@@ -5,16 +5,61 @@
 //! 必须在后端做：webview 内 fetch 跨站 HTML 会被 CORS 拦截。
 
 use base64::Engine;
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 use crate::http_client;
+use crate::error::AppError;
 
-static LINK_TAG_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?is)<link\b[^>]*>").unwrap());
-static META_TAG_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?is)<meta\b[^>]*>").unwrap());
+/// HTML 响应体最大字节数（1MB），防止恶意站点返回超大内容导致内存耗尽
+const MAX_HTML_BODY_BYTES: usize = 1 * 1024 * 1024;
+
+/// 检查 URL 是否指向内网/保留地址（SSRF 防护）
+fn is_private_or_reserved_ip(url: &reqwest::Url) -> bool {
+    let host = match url.host_str() {
+        Some(h) => h,
+        None => return true,
+    };
+    // 解析为 IP 地址
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return match ip {
+            IpAddr::V4(v4) => {
+                v4.is_loopback()            // 127.x.x.x
+                    || v4.is_link_local()    // 169.254.x.x
+                    || v4.is_private()       // 10.x.x.x, 172.16-31.x.x, 192.168.x.x
+                    || v4.is_broadcast()
+                    || v4.is_unspecified()   // 0.0.0.0
+                    || v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64 // 100.64-127.x.x (CGNAT)
+                    || v4.octets()[0] == 192 && v4.octets()[1] == 0 && v4.octets()[2] == 0 // 192.0.0.x
+                    || v4.octets()[0] == 192 && v4.octets()[1] == 0 && v4.octets()[2] == 2 // 192.0.2.x (documentation)
+                    || v4.octets()[0] == 198 && v4.octets()[1] == 18 && v4.octets()[2] == 0 // 198.18.x.x (benchmarking)
+                    || v4.octets()[0] == 198 && v4.octets()[1] == 51 && v4.octets()[2] == 100 // 198.51.100.x (documentation)
+                    || v4.octets()[0] == 203 && v4.octets()[1] == 0 && v4.octets()[2] == 113 // 203.0.113.x (documentation)
+                    || v4.octets()[0] >= 224 // multicast + reserved
+            }
+            IpAddr::V6(v6) => {
+                v6.is_loopback()            // ::1
+                    || v6.is_unspecified()   // ::
+                    || v6.is_unicast_link_local() // fe80::/10
+                    || v6.octets()[0] == 0xff // multicast
+            }
+        };
+    }
+    // 非 IP 主名：检查 localhost 等常见内网域名
+    let lower = host.to_ascii_lowercase();
+    lower == "localhost"
+        || lower.ends_with(".localhost")
+        || lower == "0.0.0.0"
+        || lower == "127.0.0.1"
+        || lower == "::1"
+}
+
+static LINK_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<link\b[^>]*>").unwrap());
+static META_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<meta\b[^>]*>").unwrap());
 
 /// 图标缓存目录：{系统缓存目录}/DevTools/software-icons
 fn icon_cache_dir() -> Result<PathBuf, String> {
@@ -135,6 +180,10 @@ async fn resolve_manifest(
     client: &reqwest::Client,
     manifest_url: &reqwest::Url,
 ) -> Option<reqwest::Url> {
+    // SSRF 阻止 manifest 指向内网地址
+    if is_private_or_reserved_ip(manifest_url) {
+        return None;
+    }
     let json: serde_json::Value = client
         .get(manifest_url.clone())
         .send()
@@ -166,6 +215,10 @@ async fn try_download_icon(
     client: &reqwest::Client,
     url: &reqwest::Url,
 ) -> Result<(String, Vec<u8>), String> {
+    // SSRF 阻止下载内网地址的资源
+    if is_private_or_reserved_ip(url) {
+        return Err(format!("不允许访问内网地址: {}", url));
+    }
     let resp = client
         .get(url.clone())
         .send()
@@ -201,6 +254,17 @@ async fn try_download_icon(
 #[tauri::command]
 pub async fn resolve_software_icon(page_url: String) -> Result<Option<String>, String> {
     let parsed = reqwest::Url::parse(&page_url).map_err(|e| format!("非法 URL: {}", e))?;
+
+    // SSRF 防护：阻止访问内网/保留地址
+    if is_private_or_reserved_ip(&parsed) {
+        return Err("不允许访问内网或保留地址".to_string());
+    }
+
+    // 仅允许 http/https 协议
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("仅支持 http/https 协议".to_string());
+    }
+
     let host = parsed.host_str().unwrap_or("unknown").to_string();
     let cache_dir = icon_cache_dir()?;
     let file_stem = host_to_filename(&host);
@@ -224,26 +288,58 @@ pub async fn resolve_software_icon(page_url: String) -> Result<Option<String>, S
         }
     }
 
-    // 2. 抓取官网首页（best-effort）。
-    //    部分站点（如 mysql.com 走 Akamai WAF）会对非浏览器 TLS 指纹返回 403，
-    //    但其静态资源 /favicon.ico 仍可直接下载——因此首页失败不能直接放弃，
-    //    退化为"无 HTML 候选，仅尝试根目录 favicon.ico"。
     let client = http_client::browser_client();
+
+    // 2. 先直接尝试 favicon.ico（快速路径：几 KB 文件，不需要下载整个页面）
+    //    大部分站点都有 /favicon.ico，成功即可直接返回，避免下载 1-2MB HTML。
+    if let Ok(favicon_url) = parsed.join("/favicon.ico") {
+        if let Ok((mime, bytes)) = try_download_icon(&client, &favicon_url).await {
+            let ext = match mime.rsplit('/').next().unwrap_or("ico") {
+                "svg+xml" => "svg".to_string(),
+                "jpeg" => "jpg".to_string(),
+                "x-icon" | "vnd.microsoft.icon" => "ico".to_string(),
+                other => sanitize_ext(other),
+            };
+            let cache_path = cache_dir.join(format!("{}.{}", file_stem, ext));
+            let _ = std::fs::write(&cache_path, &bytes);
+            let data_uri = format!(
+                "data:{};base64,{}",
+                mime,
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            );
+            return Ok(Some(data_uri));
+        }
+    }
+
+    // 3. favicon.ico 失败：下载 HTML 页面解析 <link> 候选（慢路径）
+    //    超时 / body 过大 / 读取失败均不报错，降级为空候选列表继续。
     let mut candidates: Vec<Candidate> = Vec::new();
-    let base_url = match client.get(&page_url).send().await {
-        Ok(page_resp) => {
+    let base_url = match tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client.get(&page_url).send(),
+    ).await {
+        Ok(Ok(page_resp)) => {
             let final_url = page_resp.url().clone();
             if page_resp.status().is_success() {
-                if let Ok(html) = page_resp.text().await {
-                    candidates = parse_html_candidates(&html, &final_url);
+                // 限制 HTML 响应体大小，防止恶意站点返回超大内容导致内存耗尽
+                match page_resp.bytes().await {
+                    Ok(bytes) => {
+                        if bytes.len() <= MAX_HTML_BODY_BYTES {
+                            if let Ok(html) = String::from_utf8(bytes.to_vec()) {
+                                candidates = parse_html_candidates(&html, &final_url);
+                            }
+                        }
+                        // 超大 body：静默跳过，降级到候选 favicon.ico
+                    }
+                    Err(_) => { /* body 读取失败：静默跳过 */ }
                 }
             }
             final_url
         }
-        Err(_) => parsed.clone(),
+        _ => parsed.clone(), // 超时或发送失败：用原始 URL 继续
     };
 
-    // 无论首页解析成功与否，根目录 favicon.ico 始终作为兜底候选（去重）
+    // 根目录 favicon.ico 始终作为兜底候选（去重）
     if let Ok(fallback) = base_url.join("/favicon.ico") {
         if !candidates.iter().any(|(_, u)| *u == fallback) {
             candidates.push((9, fallback));
@@ -294,6 +390,105 @@ pub async fn resolve_software_icon(page_url: String) -> Result<Option<String>, S
     }
 
     Ok(None)
+}
+
+// ──────────────────────────────────────────────────────────────────
+// 软件安装状态检测（Feature 7）
+// ──────────────────────────────────────────────────────────────────
+
+/// 软件安装检测结果
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct InstalledStatus {
+    /// 是否已安装（PATH 中能找到且 `--version` 执行成功）
+    pub installed: bool,
+    /// 版本号（命令 stdout/stderr 第一行），失败为 None
+    pub version: Option<String>,
+    /// 可执行文件绝对路径，失败为 None
+    pub path: Option<String>,
+}
+
+/// 在 PATH 中查找可执行文件。Windows 用 `where`，其他平台用 `which`。
+/// 返回第一行的绝对路径；找不到返回 None。
+async fn find_executable_in_path(executable: &str) -> Option<String> {
+    #[cfg(windows)]
+    let finder = "where";
+    #[cfg(not(windows))]
+    let finder = "which";
+
+    let mut cmd = tokio::process::Command::new(finder);
+    cmd.arg(executable);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let output = cmd.output().await.ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().next().map(|s| s.trim().to_string())
+}
+
+/// 检测命令行工具是否已安装。
+///
+/// 设计：通用命令，不耦合 software.json。前端按条目 detect 字段传入 executable+args。
+/// 1. PATH 中找不到 executable → installed=false, path=None
+/// 2. 找到 executable 但执行失败/非零退出 → installed=false, path=Some
+/// 3. 执行成功 → installed=true, version=stdout/stderr 第一行, path=Some
+///
+/// 注意：部分工具（如 `java -version`）将版本号输出到 stderr，
+/// 这里同时检查 stdout 与 stderr 取第一行作为版本号。
+#[tauri::command]
+pub async fn check_software_installed(
+    executable: String,
+    args: Vec<String>,
+) -> Result<InstalledStatus, String> {
+    if executable.trim().is_empty() {
+        return Err(AppError::Validation("可执行文件名不能为空".to_string()).to_string());
+    }
+
+    let path = find_executable_in_path(&executable).await;
+
+    if path.is_none() {
+        return Ok(InstalledStatus {
+            installed: false,
+            version: None,
+            path: None,
+        });
+    }
+
+    // 执行命令获取版本号；超时 5 秒避免长时间挂起
+    let mut version_cmd = tokio::process::Command::new(&executable);
+    version_cmd.args(&args);
+    #[cfg(target_os = "windows")]
+    version_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let run_result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        version_cmd.output(),
+    )
+    .await;
+
+    let version = match run_result {
+        Ok(Ok(out)) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            stdout
+                .lines()
+                .next()
+                .or_else(|| stderr.lines().next())
+                .map(|s| s.trim().to_string())
+        }
+        _ => None,
+    };
+
+    Ok(InstalledStatus {
+        // 找到可执行文件即视为"已安装"——
+        // 即使 --version 命令失败，至少二进制文件存在于 PATH 中
+        installed: version.is_some(),
+        version,
+        path,
+    })
 }
 
 #[cfg(test)]
@@ -375,5 +570,41 @@ mod tests {
             .expect("命令不应返回 Err");
         let uri = result.expect("应通过 /favicon.ico 兜底拿到图标");
         assert!(uri.starts_with("data:image/"), "返回应为 data URI，实际前缀: {}", &uri[..uri.len().min(30)]);
+    }
+
+    /// 真实 PATH 检测（需本机存在对应可执行文件，默认跳过）：
+    /// 验证 check_software_installed 命令的端到端行为。
+    /// 运行：cargo test software -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn check_existing_command_version() {
+        // cmd 内置 echo 在 Windows 上能稳定返回 0
+        let status = super::check_software_installed("cmd".to_string(), vec!["/c".to_string(), "echo hello".to_string()])
+            .await
+            .expect("命令不应返回 Err");
+        assert!(status.installed);
+        assert_eq!(status.version.as_deref(), Some("hello"));
+        assert!(status.path.is_some());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn check_nonexistent_command_returns_not_installed() {
+        let status = super::check_software_installed(
+            "definitely-not-existing-xyz-12345".to_string(),
+            vec!["--version".to_string()],
+        )
+        .await
+        .expect("命令不应返回 Err");
+        assert!(!status.installed);
+        assert!(status.path.is_none());
+    }
+
+    #[tokio::test]
+    async fn check_empty_executable_returns_validation_error() {
+        let result = super::check_software_installed("  ".to_string(), vec![]).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("可执行文件名不能为空"));
     }
 }

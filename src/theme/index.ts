@@ -1,9 +1,15 @@
 import type { GlobalThemeOverrides } from 'naive-ui'
-import { semanticTokens, semanticPalette, derivePrimary } from './tokens'
+import { semanticTokens, semanticPalette, derivePrimary, hslShift } from './tokens'
 
-const commonOpacities: Record<string, string> = {
-  opacity1: '0.82', opacity2: '0.72', opacity3: '0.38',
-  opacity4: '0.24', opacity5: '0.18',
+/**
+ * 从 HEX 派生 hover/pressed 状态，替代硬编码值。
+ * 与 derivePrimary 使用相同的 HSL 偏移算法。
+ */
+function deriveHoverPressed(hex: string, mode: 'light' | 'dark') {
+  return {
+    hover: hslShift(hex, { l: mode === 'dark' ? 8 : -8 }),
+    pressed: hslShift(hex, { l: mode === 'dark' ? -5 : -15 }),
+  }
 }
 
 /**
@@ -14,6 +20,9 @@ const commonOpacities: Record<string, string> = {
 export function buildThemeOverrides(primaryColor: string, mode: 'light' | 'dark'): GlobalThemeOverrides {
   const t = semanticTokens[mode]
   const p = derivePrimary(primaryColor, mode)
+  const success = deriveHoverPressed(semanticPalette.success, mode)
+  const warning = deriveHoverPressed(semanticPalette.warning, mode)
+  const error = deriveHoverPressed(semanticPalette.danger, mode)
 
   const base = {
     common: {
@@ -22,28 +31,33 @@ export function buildThemeOverrides(primaryColor: string, mode: 'light' | 'dark'
       primaryColorHover: p.hover,
       primaryColorPressed: p.pressed,
       primaryColorSuppl: p.onPrimary,
-      // 语义色（对齐 CSS 变量 --color-success/warning/danger）
+      // 语义色（算法派生 hover/pressed）
       successColor: semanticPalette.success,
-      successColorHover: semanticPalette.success,
-      successColorPressed: semanticPalette.success,
+      successColorHover: success.hover,
+      successColorPressed: success.pressed,
       successColorSuppl: '#ffffff',
       warningColor: semanticPalette.warning,
-      warningColorHover: semanticPalette.warning,
-      warningColorPressed: semanticPalette.warning,
+      warningColorHover: warning.hover,
+      warningColorPressed: warning.pressed,
       warningColorSuppl: '#ffffff',
       errorColor: semanticPalette.danger,
-      errorColorHover: semanticPalette.danger,
-      errorColorPressed: semanticPalette.danger,
+      errorColorHover: error.hover,
+      errorColorPressed: error.pressed,
       errorColorSuppl: '#ffffff',
       infoColor: p.primary,
       infoColorHover: p.hover,
       infoColorPressed: p.pressed,
       infoColorSuppl: p.onPrimary,
 
-      fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-      borderRadius: '8px', borderRadiusSmall: '6px',
+      // 字体
+      fontFamily: "var(--font-sans)",
+      fontFamilyMono: "var(--font-mono)",
 
-      // 背景 / 卡片 / 浮层（对齐 --bg-*）
+      // 圆角
+      borderRadius: '8px',
+      borderRadiusSmall: '6px',
+
+      // 背景 / 卡片 / 浮层
       bodyColor: t.bg.primary,
       cardColor: t.bg.secondary,
       modalColor: t.bg.tertiary,
@@ -53,31 +67,63 @@ export function buildThemeOverrides(primaryColor: string, mode: 'light' | 'dark'
       actionColor: t.bg.tertiary,
       tagColor: t.bg.tertiary,
 
+      // 交互
       hoverColor: mode === 'dark' ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)',
       dividerColor: t.border.primary,
       borderColor: t.border.primary,
 
+      // 文字
       textColorBase: t.text.primary,
       textColor1: t.text.primary,
       textColor2: t.text.secondary,
       textColor3: t.text.muted,
+
+      // 透明度
+      opacity1: '0.82',
+      opacity2: '0.72',
+      opacity3: '0.38',
+      opacity4: '0.24',
+      opacity5: '0.18',
     },
-    Button: { borderRadiusMedium: '8px', borderRadiusSmall: '6px', borderRadiusLarge: '10px' },
-    Card: { borderRadius: '12px' },
-    Input: { borderRadius: '8px' },
-    Tag: { borderRadius: '6px' },
-    Tooltip: { borderRadius: '6px', padding: '6px 10px' },
+
+    // ===== 组件级覆盖 =====
+    Button: {
+      borderRadiusMedium: '8px',
+      borderRadiusSmall: '6px',
+      borderRadiusLarge: '10px',
+      fontWeight: '500',
+    },
+    Card: {
+      borderRadius: '12px',
+      borderColor: t.border.primary,
+      titleFontWeight: '600',
+    },
+    Input: {
+      borderRadius: '8px',
+      color: t.bg.tertiary,
+      borderHover: `1px solid ${t.border.hover}`,
+      borderFocus: `1px solid ${p.primary}`,
+      boxShadowFocus: `0 0 0 2px ${p.light}`,
+    },
+    Tag: {
+      borderRadius: '6px',
+    },
+    Tooltip: {
+      borderRadius: '6px',
+      padding: '6px 10px',
+    },
     Tabs: {
       tabTextColor: t.text.muted,
       tabTextColorActive: p.primary,
       tabTextColorHover: p.hover,
       barColor: p.primary,
+      tabBorderRadius: '6px',
     },
     Menu: {
       borderRadius: '8px',
-      itemColorActive: 'transparent',
-      itemColorActiveHover: 'transparent',
-      itemColorActiveCollapsed: 'transparent',
+      itemColorActive: p.light,
+      itemColorActiveHover: p.light,
+      itemColorActiveCollapsed: p.light,
       itemIconColorActive: p.primary,
       itemIconColorActiveHover: p.primary,
       itemTextColorActive: p.primary,
@@ -86,20 +132,56 @@ export function buildThemeOverrides(primaryColor: string, mode: 'light' | 'dark'
       itemTextColorChildActive: p.primary,
       itemTextColorChildActiveHover: p.primary,
     },
-    ActionIcon: {
-      colorHover: mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-      colorPressed: mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
-      iconColor: mode === 'dark' ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.7)',
-      iconColorHover: mode === 'dark' ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.9)',
+    Switch: {
+      railColorActive: p.primary,
+    },
+    Checkbox: {
+      colorChecked: p.primary,
+      borderChecked: `1px solid ${p.primary}`,
+      checkMarkColor: p.onPrimary,
+    },
+    Radio: {
+      buttonColorActive: p.primary,
+      buttonTextColorActive: p.onPrimary,
+    },
+    Progress: {
+      fillColor: p.primary,
+      fillColorError: semanticPalette.danger,
+      fillColorWarning: semanticPalette.warning,
+    },
+    Scrollbar: {
+      color: t.scrollbar.thumb,
+      colorHover: t.scrollbar.thumbHover,
+    },
+    Modal: {
+      borderRadius: '12px',
+      color: t.bg.tertiary,
+    },
+    Drawer: {
+      borderRadius: '12px',
+      color: t.bg.tertiary,
+    },
+    Alert: {
+      borderRadius: '8px',
+    },
+    DataTable: {
+      borderRadius: '8px',
+    },
+    Popover: {
+      borderRadius: '8px',
+      color: t.bg.elevated,
+    },
+    Message: {
+      borderRadius: '8px',
+    },
+    Notification: {
+      borderRadius: '8px',
     },
   }
 
-  return {
-    ...base,
-    common: { ...base.common, ...commonOpacities },
-  }
+  return base
 }
 
-/** 向后兼容：默认蓝主题覆盖（App.vue 直接调用 buildThemeOverrides 即可） */
+/** 向后兼容：默认蓝主题覆盖 */
 export const themeOverrides: GlobalThemeOverrides = buildThemeOverrides('#3b82f6', 'light')
 export const darkThemeOverrides: GlobalThemeOverrides = buildThemeOverrides('#3b82f6', 'dark')

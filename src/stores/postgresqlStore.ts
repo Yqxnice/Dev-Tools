@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { useDbTool, type DbService } from '../composables/useDbTool'
+import { useDbTool } from '../composables/useDbTool'
 import { postgresqlService } from '../services/postgresqlService'
 import type { PostgresqlInfo, PostgresqlInstance, PostgresqlVersionInfo } from '../types'
 
@@ -8,7 +8,7 @@ export const usePostgresqlStore = defineStore('postgresql', () => {
     id: 'postgresql',
     cacheKey: 'postgresql_manager_cache',
     downloadPrefix: 'postgresql:',
-    service: postgresqlService as unknown as DbService<PostgresqlInstance, PostgresqlInfo, PostgresqlVersionInfo>,
+    service: postgresqlService,
     cleanRegistryInstallerDefault: false,
   })
 })

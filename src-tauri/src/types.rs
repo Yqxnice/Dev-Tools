@@ -359,6 +359,98 @@ pub struct JetBrainsResidueScanResult {
     pub excluded_note: String,
 }
 
+/// 应用更新检查结果（Feature 18）
+///
+/// 后端 `check_for_updates` 命令的返回类型。
+/// - `has_update`：远端最新版本号是否大于当前版本
+/// - `current_version`：当前应用版本（来自 tauri.conf.json）
+/// - `latest_version`：远端最新发布版本号（已去除前导 `v`）
+/// - `html_url`：浏览器可访问的 release 页面 URL
+/// - `body`：release 说明（changelog），可能为 None
+/// - `published_at`：发布时间（ISO 8601 字符串）
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../src/types/generated/")]
+pub struct UpdateInfo {
+    pub has_update: bool,
+    pub current_version: String,
+    pub latest_version: String,
+    pub html_url: String,
+    pub body: Option<String>,
+    pub published_at: Option<String>,
+}
+
+/// PATH 条目（Feature 3 环境变量管理器）
+///
+/// 一条 PATH 项的元数据：
+/// - `path`：原始路径字符串
+/// - `scope`：'system'（来自 HKLM）或 'user'（来自 HKCU）
+/// - `exists`：路径在文件系统中是否真实存在
+/// - `tool`：识别为哪个工具（java/python/node/...），未识别为 None
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../src/types/generated/")]
+pub struct EnvPath {
+    pub path: String,
+    pub scope: String,
+    pub exists: bool,
+    pub tool: Option<String>,
+}
+
+/// 环境变量键值对（Feature 3）
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../src/types/generated/")]
+pub struct EnvVariable {
+    pub name: String,
+    pub value: String,
+    pub scope: String,
+}
+
+/// PATH 冲突项（Feature 3）
+///
+/// - `kind`：'duplicate'（重复路径）/ 'missing'（不存在）/ 'multi_version'（同工具多版本共存）
+/// - `tool`：仅 multi_version 时填充工具名
+/// - `paths`：涉及的路径列表
+/// - `message`：人类可读说明
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../src/types/generated/")]
+pub struct PathConflict {
+    pub kind: String,
+    pub tool: Option<String>,
+    pub paths: Vec<String>,
+    pub message: String,
+}
+
+/// 系统信息（操作系统版本、架构、CPU、内存等）
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../src/types/generated/")]
+pub struct SystemInfo {
+    /// 操作系统名称，如 "Windows" / "macOS" / "Linux"
+    pub os_name: Option<String>,
+    /// 操作系统版本，如 "10.0.22631"
+    pub os_version: Option<String>,
+    /// 内核版本
+    pub kernel_version: Option<String>,
+    /// 主机名
+    pub host_name: Option<String>,
+    /// CPU 架构，如 "x86_64" / "aarch64"
+    pub architecture: Option<String>,
+    /// CPU 品牌名，如 "Intel(R) Core(TM) i7-12700H"
+    pub cpu_name: String,
+    /// CPU 主频（MHz）
+    pub cpu_frequency_mhz: u64,
+    /// 物理核心数
+    pub cpu_physical_cores: u32,
+    /// 逻辑核心数（线程数）
+    pub cpu_logical_cores: u32,
+    /// 总内存（字节）
+    pub total_memory_bytes: u64,
+    /// 已用内存（字节）
+    pub used_memory_bytes: u64,
+    /// 可用内存（字节）
+    pub available_memory_bytes: u64,
+    /// 系统运行时间（秒）
+    pub uptime_seconds: u64,
+}
+
 /// 主动导出所有 TS 类型到前端 generated 目录。
 /// 运行 `cargo test export_ts_types` 即可生成/更新前端类型。
 /// ts-rs 的 #[ts(export)] 在程序启动时才写文件，库 crate 的 cargo build 不会触发，
@@ -405,6 +497,11 @@ mod ts_export {
         ProcessOutput::export().unwrap();
         ToolFeature::export().unwrap();
         ToolInfo::export().unwrap();
+        UpdateInfo::export().unwrap();
+        EnvPath::export().unwrap();
+        EnvVariable::export().unwrap();
+        PathConflict::export().unwrap();
+        SystemInfo::export().unwrap();
     }
 }
 

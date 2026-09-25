@@ -1,10 +1,11 @@
-use super::super::{http_client, logger, types::AvailableJavaVersion};
-use once_cell::sync::Lazy;
+use super::super::{download_control, http_client, logger, types::AvailableJavaVersion};
+use std::sync::LazyLock;
 use regex::Regex;
+use std::path::PathBuf;
 use tauri::AppHandle;
 
 /// 校验 feature version（数字字符串）
-static FEATURE_VERSION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+$").unwrap());
+static FEATURE_VERSION_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d+$").unwrap());
 
 /// Adoptium API 基址
 const API_BASE: &str = "https://api.adoptium.net";
@@ -130,15 +131,97 @@ pub fn validate_feature_version(version: &str) -> Result<u32, String> {
         .map_err(|e| format!("版本号解析失败: {}", e))
 }
 
-/// 返回指定 feature version 的 JDK 下载链接（.msi 安装包）
+/// 包类型：installer（.msi 安装包）或 archive（.zip 压缩包）
+pub const PACKAGE_TYPE_INSTALLER: &str = "installer";
+pub const PACKAGE_TYPE_ARCHIVE: &str = "archive";
+
+/// 根据 package_type 返回对应的文件扩展名
+fn package_extension(package_type: &str) -> &'static str {
+    match package_type {
+        PACKAGE_TYPE_ARCHIVE => "zip",
+        _ => "msi",
+    }
+}
+
+/// 返回指定 feature version 的 JDK 下载链接
 ///
-/// 使用 Adoptium 的 latest 重定向链接，自动指向最新 patch 版本：
-/// https://api.adoptium.net/v3/binary/latest/{version}/ga/windows/x64/jdk/hotspot/normal/eclipse
-pub fn get_download_url(feature_version: u32) -> String {
+/// 根据 package_type 选择端点：
+/// - `installer` → `/v3/installer/latest/...`（Windows .msi 安装程序）
+/// - `archive`   → `/v3/binary/latest/...`（Windows .zip 压缩归档）
+pub fn get_download_url(feature_version: u32, package_type: &str) -> String {
+    let endpoint = match package_type {
+        PACKAGE_TYPE_ARCHIVE => "binary",
+        _ => "installer",
+    };
     format!(
-        "{}/v3/binary/latest/{}/ga/windows/x64/jdk/hotspot/normal/eclipse",
-        API_BASE, feature_version
+        "{}/v3/{}/latest/{}/ga/windows/x64/jdk/hotspot/normal/eclipse",
+        API_BASE, endpoint, feature_version
     )
+}
+
+/// 下载目录：复用公共路径函数
+async fn get_download_dir() -> PathBuf {
+    let dir = download_control::devtools_download_dir();
+    let _ = tokio::fs::create_dir_all(&dir).await;
+    dir
+}
+
+/// 下载 Java (JDK) 安装包/压缩包并返回文件路径
+pub async fn download_java(
+    app_handle: AppHandle,
+    feature_version: u32,
+    package_type: &str,
+    window: tauri::Window,
+) -> Result<PathBuf, String> {
+    let task_id = format!("java:{}:{}", feature_version, package_type);
+    let download_url = get_download_url(feature_version, package_type);
+    let ext = package_extension(package_type);
+    logger::info(
+        &app_handle,
+        &format!("开始下载 Java {} ({})", feature_version, package_type),
+    );
+
+    let download_dir = get_download_dir().await;
+    let file_path = download_dir.join(format!(
+        "openjdk-{}-windows-x64-bin.{}",
+        feature_version, ext
+    ));
+
+    let (actual_size, declared_size) = download_control::download_file(
+        &app_handle,
+        &window,
+        &task_id,
+        &download_url,
+        &file_path,
+        &feature_version.to_string(),
+        http_client::default_client(),
+        3,
+    )
+    .await?;
+
+    download_control::emit_completed(
+        &window,
+        &task_id,
+        &feature_version.to_string(),
+        actual_size,
+        declared_size,
+    );
+    logger::info(
+        &app_handle,
+        &format!("下载完成: {}（{} 字节）", file_path.display(), actual_size),
+    );
+    Ok(file_path)
+}
+
+/// 只下载 Java 安装包/压缩包，返回路径字符串
+pub async fn download_java_only(
+    app_handle: AppHandle,
+    feature_version: u32,
+    package_type: &str,
+    window: tauri::Window,
+) -> Result<String, String> {
+    let installer_path = download_java(app_handle, feature_version, package_type, window).await?;
+    Ok(installer_path.to_str().unwrap_or("").to_string())
 }
 
 #[cfg(test)]
@@ -163,9 +246,24 @@ mod tests {
     }
 
     #[test]
-    fn download_url_contains_feature_version() {
-        let url = get_download_url(17);
+    fn download_url_installer_uses_installer_endpoint() {
+        let url = get_download_url(17, PACKAGE_TYPE_INSTALLER);
         assert!(url.contains("/latest/17/"));
         assert!(url.contains("adoptium.net"));
+        assert!(url.contains("/v3/installer/"));
+    }
+
+    #[test]
+    fn download_url_archive_uses_binary_endpoint() {
+        let url = get_download_url(21, PACKAGE_TYPE_ARCHIVE);
+        assert!(url.contains("/latest/21/"));
+        assert!(url.contains("/v3/binary/"));
+    }
+
+    #[test]
+    fn package_extension_maps_correctly() {
+        assert_eq!(package_extension(PACKAGE_TYPE_INSTALLER), "msi");
+        assert_eq!(package_extension(PACKAGE_TYPE_ARCHIVE), "zip");
+        assert_eq!(package_extension("unknown"), "msi"); // 默认回退到 msi
     }
 }

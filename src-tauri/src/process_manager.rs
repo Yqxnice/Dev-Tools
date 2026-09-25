@@ -174,8 +174,19 @@ pub fn validate_mirror_url(url: &str) -> AppResult<()> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err(AppError::Validation("镜像源URL必须以http://或https://开头".to_string()));
     }
-    if url.contains([';', '|', '&', '`']) {
+    if url.contains([';', '|', '&', '`', '$']) {
         return Err(AppError::Validation("URL包含非法字符".to_string()));
+    }
+    // 阻止命令注入、换行符注入和 null 字节
+    if url.contains('\n') || url.contains('\r') || url.contains('\0') {
+        return Err(AppError::Validation("URL包含非法控制字符".to_string()));
+    }
+    if url.contains("$(") || url.contains("${") {
+        return Err(AppError::Validation("URL包含命令替换语法".to_string()));
+    }
+    // 阻止路径穿越
+    if url.contains("..") {
+        return Err(AppError::Validation("URL包含路径穿越".to_string()));
     }
     Ok(())
 }

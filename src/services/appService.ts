@@ -1,7 +1,7 @@
 import { ipc } from '@/services/ipc'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { ToolInfo, LogMessage } from '@/types'
+import type { ToolInfo, LogMessage, UpdateInfo } from '@/types'
 
 export const appService = {
   isAdmin: () =>
@@ -14,9 +14,34 @@ export const appService = {
   getToolList: () =>
     ipc<ToolInfo[]>('get_tool_list'),
 
+  /**
+   * 检查应用更新（Feature 18）
+   * 调用 GitHub Releases API，对比当前版本与最新发布版本。
+   * 返回 UpdateInfo：has_update=true 时建议提示用户更新。
+   */
+  checkForUpdates: () =>
+    ipc<UpdateInfo>('check_for_updates'),
+
   /** 导出日志到「下载/DevTools/logs」，返回文件完整路径 */
   exportLogs: (content: string) =>
     ipc<string>('export_logs', { content }),
+
+  /** 导出配置 JSON 到「下载/DevTools/config」，返回文件完整路径 */
+  exportConfig: (content: string) =>
+    ipc<string>('export_config', { content }),
+
+  /**
+   * 设置运行时默认版本（Feature 4）
+   * - tool: 'java' | 'python' | 'node'
+   * - version_path: 安装路径（如 Java 的 JAVA_HOME 目录）
+   *
+   * 后端仅修改用户级注册表（HKCU\Environment）：
+   *  - java: 写 JAVA_HOME
+   *  - python: 写 PYTHONHOME
+   *  - node: 无 HOME 概念，返回提示让用户改 PATH 优先级
+   */
+  setDefaultRuntime: (tool: 'java' | 'python' | 'node', versionPath: string) =>
+    ipc<string>('set_default_runtime_command', { tool, versionPath }),
 
   setupLogListener: (callback: (event: { payload: LogMessage }) => void) =>
     listen<LogMessage>('log-message', callback),

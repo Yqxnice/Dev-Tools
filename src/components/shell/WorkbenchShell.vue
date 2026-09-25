@@ -1,22 +1,23 @@
 <script setup lang="ts">
 /**
- * 工作区 Shell：IDE 范式布局容器，组合顶部标题栏 + 工具 Tab 条 + 二级功能导航 + 主区 + 日志栏。
- * 主区内容通过默认插槽注入（router-view + keep-alive + n-spin）。
- * 切换路由时重置主区 .feature-panel 的滚动位置（keep-alive 缓存的页面切回时恢复顶部）。
+ * 工作区 Shell：侧边栏导航布局容器
+ * 组合标题栏 + 侧边栏 + 标签栏 + 主区 + 日志栏。
  */
 import { ref, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { NSpin } from 'naive-ui'
+import { NSpin, NAlert } from 'naive-ui'
 import { useAppStore } from '../../stores/appStore'
 import AppTitleBar from './AppTitleBar.vue'
-import ToolTabsBar from './ToolTabsBar.vue'
-import SubNav from './SubNav.vue'
+import Sidebar from './Sidebar.vue'
+import TabBar from './TabBar.vue'
 import LogDock from './LogDock.vue'
 
 const app = useAppStore()
 const route = useRoute()
 
 const mainRef = ref<HTMLElement | null>(null)
+
+// 路由变化时滚动到顶部
 watch(() => route.fullPath, () => {
   nextTick(() => {
     const panel = mainRef.value?.querySelector('.feature-panel')
@@ -26,36 +27,127 @@ watch(() => route.fullPath, () => {
 </script>
 
 <template>
-  <div class="workbench-shell">
+  <div class="shell">
     <AppTitleBar />
-    <ToolTabsBar />
-    <SubNav />
-    <main ref="mainRef" class="shell-main">
-      <n-spin :show="app.globalLoading" class="shell-spin">
-        <slot />
-      </n-spin>
-    </main>
-    <LogDock />
+    
+    <div class="shell__body">
+      <!-- 侧边栏 -->
+      <Sidebar />
+      
+      <!-- 主内容区 -->
+      <div class="shell__content">
+        <!-- 离线提示 -->
+        <n-alert
+          v-if="!app.isOnline"
+          type="warning"
+          :show-icon="false"
+          class="shell__offline"
+        >
+          网络已断开，部分功能（版本检测、下载）暂时不可用
+        </n-alert>
+        <!-- 标签栏 -->
+        <TabBar />
+        
+        <!-- 页面内容 -->
+        <main
+          ref="mainRef"
+          class="shell__main"
+        >
+          <n-spin
+            :show="app.globalLoading"
+            class="shell__spin"
+          >
+            <router-view v-slot="{ Component }">
+              <transition
+                name="page"
+                mode="out-in"
+              >
+                <keep-alive :max="15">
+                  <component
+                    :is="Component"
+                    :key="$route.fullPath"
+                  />
+                </keep-alive>
+              </transition>
+            </router-view>
+          </n-spin>
+        </main>
+        
+        <!-- 日志面板 -->
+        <LogDock />
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.workbench-shell {
+.shell {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.shell__body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.shell__content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.shell__offline {
+  flex-shrink: 0;
+  border-radius: 0;
+  font-size: var(--text-sm);
+}
+
+.shell__main {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--bg-primary);
 }
-.shell-main {
-  flex: 1;
+
+.shell__spin {
+  flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 }
-/* n-spin 容器纵向撑满 + 被父级约束，让内部 .feature-panel 的 overflow-y:auto 能触发滚动
-   flex:1 1 0 + min-height:0 避免 basis:auto 撑破父级 overflow:hidden 导致裁剪而非滚动 */
-.shell-spin { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
-.shell-spin :deep(.n-spin-content) { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+
+.shell__spin :deep(.n-spin-content) {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 页面切换动画 */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity var(--duration-fast) var(--ease-standard),
+              transform var(--duration-fast) var(--ease-standard);
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
 </style>

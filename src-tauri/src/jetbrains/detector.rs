@@ -1,10 +1,10 @@
 use super::super::{logger, process_manager, types::JetBrainsInstallation};
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use regex::Regex;
 use tauri::AppHandle;
 
 /// 已安装 JetBrains 产品（用于版本检测与卸载清理的产品代号推断）
-static INSTALLED_REGEX: Lazy<Regex> = Lazy::new(|| {
+static INSTALLED_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"IntelliJ IDEA|PyCharm|WebStorm|GoLand|CLion|DataGrip|PhpStorm|RubyMine|RustRover|Rider|AppCode|JetBrains Toolbox",
     )

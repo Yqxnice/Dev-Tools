@@ -50,83 +50,95 @@ export interface SemanticTokens {
   border: {
     primary: string
     hover: string
+    focus: string
   }
   scrollbar: {
     thumb: string
     thumbHover: string
   }
   shadow: {
+    xs: string
     sm: string
     md: string
     lg: string
+    xl: string
     dropdown: string
     modal: string
+    glow: string
   }
 }
 
 export const semanticTokens: Record<'light' | 'dark', SemanticTokens> = {
   dark: {
     bg: {
-      primary: '#0a0a0f',
-      secondary: '#0f0f17',
-      tertiary: '#14141f',
-      card: 'rgba(255, 255, 255, 0.02)',
-      cardHover: 'rgba(255, 255, 255, 0.04)',
-      elevated: 'rgba(255, 255, 255, 0.05)',
-      overlay: 'rgba(0, 0, 0, 0.5)',
-      sunken: 'rgba(0, 0, 0, 0.25)',
+      primary: '#0f1019',
+      secondary: '#141520',
+      tertiary: '#1a1b2e',
+      card: 'rgba(255, 255, 255, 0.03)',
+      cardHover: 'rgba(255, 255, 255, 0.06)',
+      elevated: 'rgba(255, 255, 255, 0.07)',
+      overlay: 'rgba(0, 0, 0, 0.6)',
+      sunken: 'rgba(0, 0, 0, 0.3)',
     },
     text: {
-      primary: '#f1f5f9',
-      secondary: 'rgba(255, 255, 255, 0.75)',
-      muted: 'rgba(255, 255, 255, 0.5)',
+      primary: '#e2e5ef',
+      secondary: 'rgba(255, 255, 255, 0.7)',
+      muted: 'rgba(255, 255, 255, 0.42)',
     },
     border: {
-      primary: 'rgba(255, 255, 255, 0.1)',
-      hover: 'rgba(255, 255, 255, 0.14)',
+      primary: 'rgba(255, 255, 255, 0.08)',
+      hover: 'rgba(255, 255, 255, 0.15)',
+      focus: 'rgba(255, 255, 255, 0.2)',
     },
     scrollbar: {
       thumb: 'rgba(255, 255, 255, 0.1)',
-      thumbHover: 'rgba(255, 255, 255, 0.2)',
+      thumbHover: 'rgba(255, 255, 255, 0.22)',
     },
     shadow: {
-      sm: '0 1px 2px rgba(0, 0, 0, 0.3)',
-      md: '0 4px 12px rgba(0, 0, 0, 0.4)',
-      lg: '0 8px 24px rgba(0, 0, 0, 0.5)',
-      dropdown: '0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.3)',
-      modal: '0 16px 48px rgba(0, 0, 0, 0.6)',
+      xs: '0 1px 2px rgba(0, 0, 0, 0.4)',
+      sm: '0 2px 4px rgba(0, 0, 0, 0.4)',
+      md: '0 4px 16px rgba(0, 0, 0, 0.5)',
+      lg: '0 8px 32px rgba(0, 0, 0, 0.55)',
+      xl: '0 16px 48px rgba(0, 0, 0, 0.6)',
+      dropdown: '0 8px 28px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.4)',
+      modal: '0 20px 60px rgba(0, 0, 0, 0.7)',
+      glow: '0 0 24px rgba(var(--color-primary-rgb, 59, 130, 246), 0.15)',
     },
   },
   light: {
     bg: {
-      primary: '#ffffff',
-      secondary: '#f8fafc',
-      tertiary: '#f1f5f9',
-      card: 'rgba(0, 0, 0, 0.02)',
-      cardHover: 'rgba(0, 0, 0, 0.04)',
+      primary: '#f6f7fb',
+      secondary: '#edeef4',
+      tertiary: '#e3e5ed',
+      card: 'rgba(255, 255, 255, 0.8)',
+      cardHover: 'rgba(255, 255, 255, 0.95)',
       elevated: '#ffffff',
-      overlay: 'rgba(0, 0, 0, 0.45)',
-      sunken: 'rgba(0, 0, 0, 0.04)',
+      overlay: 'rgba(0, 0, 0, 0.4)',
+      sunken: 'rgba(0, 0, 0, 0.03)',
     },
     text: {
-      primary: '#0f172a',
-      secondary: 'rgba(0, 0, 0, 0.7)',
-      muted: 'rgba(0, 0, 0, 0.5)',
+      primary: '#1a1d2e',
+      secondary: 'rgba(0, 0, 0, 0.65)',
+      muted: 'rgba(0, 0, 0, 0.4)',
     },
     border: {
-      primary: 'rgba(0, 0, 0, 0.1)',
-      hover: 'rgba(0, 0, 0, 0.14)',
+      primary: 'rgba(0, 0, 0, 0.08)',
+      hover: 'rgba(0, 0, 0, 0.15)',
+      focus: 'rgba(0, 0, 0, 0.2)',
     },
     scrollbar: {
-      thumb: 'rgba(0, 0, 0, 0.15)',
-      thumbHover: 'rgba(0, 0, 0, 0.25)',
+      thumb: 'rgba(0, 0, 0, 0.14)',
+      thumbHover: 'rgba(0, 0, 0, 0.24)',
     },
     shadow: {
-      sm: '0 1px 2px rgba(0, 0, 0, 0.08)',
-      md: '0 4px 12px rgba(0, 0, 0, 0.1)',
-      lg: '0 8px 24px rgba(0, 0, 0, 0.12)',
-      dropdown: '0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08)',
-      modal: '0 16px 48px rgba(0, 0, 0, 0.18)',
+      xs: '0 1px 2px rgba(0, 0, 0, 0.04)',
+      sm: '0 2px 4px rgba(0, 0, 0, 0.06)',
+      md: '0 4px 16px rgba(0, 0, 0, 0.08)',
+      lg: '0 8px 32px rgba(0, 0, 0, 0.1)',
+      xl: '0 16px 48px rgba(0, 0, 0, 0.14)',
+      dropdown: '0 8px 28px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06)',
+      modal: '0 20px 60px rgba(0, 0, 0, 0.18)',
+      glow: '0 0 24px rgba(var(--color-primary-rgb, 59, 130, 246), 0.1)',
     },
   },
 }
@@ -145,6 +157,8 @@ export interface DerivedPrimary {
   light: string
   /** 主色背景上的文字/图标色（默认白；主色极浅时自动切黑） */
   onPrimary: string
+  /** 主色 RGB 分量（用于 rgba() 构造） */
+  primaryRgb: string
 }
 
 /**
@@ -156,13 +170,14 @@ export function derivePrimary(hex: string, mode: 'light' | 'dark'): DerivedPrima
   const pressed = hslShift(hex, { l: mode === 'dark' ? -5 : -15 })
   const light = lightVariant(hex)
   const onPrimary = pickOnPrimary(hex)
-  return { primary: hex, hover, pressed, light, onPrimary }
+  const { r, g, b } = hexToRgb(hex)
+  const primaryRgb = `${r}, ${g}, ${b}`
+  return { primary: hex, hover, pressed, light, onPrimary, primaryRgb }
 }
 
 /** 根据主色亮度自动选择黑/白作为其上的文字色（WCAG 对比度简化判断） */
 function pickOnPrimary(hex: string): string {
   const { r, g, b } = hexToRgb(hex)
-  // 相对亮度（sRGB）
   const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
   return luminance > 0.6 ? '#1a1a1a' : '#ffffff'
 }
@@ -178,6 +193,8 @@ export interface ThemeApplyInput {
 /**
  * 把语义 token + 派生主色全部写入 :root 的 CSS 变量。
  * 自定义组件只消费这些变量，不直接写死颜色。
+ *
+ * 使用 cssText 批量写入，避免逐条 setProperty 导致多次重排（reflow）。
  */
 export function applyCssTokens({ mode, primary }: ThemeApplyInput): void {
   const root = document.documentElement
@@ -188,8 +205,10 @@ export function applyCssTokens({ mode, primary }: ThemeApplyInput): void {
     // 主色系
     '--color-primary': p.primary,
     '--color-primary-hover': p.hover,
+    '--color-primary-pressed': p.pressed,
     '--color-primary-light': p.light,
     '--color-on-primary': p.onPrimary,
+    '--color-primary-rgb': p.primaryRgb,
 
     // 语义色
     '--color-success': semanticPalette.success,
@@ -218,22 +237,34 @@ export function applyCssTokens({ mode, primary }: ThemeApplyInput): void {
     // 边框
     '--border-primary': t.border.primary,
     '--border-hover': t.border.hover,
+    '--border-focus': t.border.focus,
 
     // 滚动条
     '--scrollbar-thumb': t.scrollbar.thumb,
     '--scrollbar-thumb-hover': t.scrollbar.thumbHover,
 
     // 阴影
+    '--shadow-xs': t.shadow.xs,
     '--shadow-sm': t.shadow.sm,
     '--shadow-md': t.shadow.md,
     '--shadow-lg': t.shadow.lg,
+    '--shadow-xl': t.shadow.xl,
     '--shadow-dropdown': t.shadow.dropdown,
     '--shadow-modal': t.shadow.modal,
+    '--shadow-glow': t.shadow.glow,
   }
 
+  // 批量构建 CSS 文本，一次性写入，避免多次 setProperty 触发重排
+  let cssText = ''
   for (const [k, v] of Object.entries(vars)) {
-    root.style.setProperty(k, v)
+    cssText += `${k}:${v};`
   }
+
+  // 保留已有的 style 属性（如其他脚本可能设置的），只更新变量部分
+  const existing = root.getAttribute('style') || ''
+  // 移除已有的 CSS 变量定义
+  const cleaned = existing.replace(/--[\w-]+:[^;]+;?/g, '').trim()
+  root.setAttribute('style', cleaned ? cleaned + cssText : cssText)
 }
 
 // ============================================================================
@@ -250,7 +281,7 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 }
 
 /** HSL 亮度/饱和度偏移：保持色相，微调亮度或饱和度 */
-function hslShift(hex: string, opts: { h?: number; s?: number; l?: number }): string {
+export function hslShift(hex: string, opts: { h?: number; s?: number; l?: number }): string {
   const { h = 0, s = 0, l = 0 } = opts
   const { r, g, b } = hexToRgb(hex)
   if (r === 0 && g === 0 && b === 0) return hex

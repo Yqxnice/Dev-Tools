@@ -17,8 +17,8 @@ pub async fn detect_postgresql(app_handle: AppHandle) -> Result<PostgresqlInfo, 
 }
 
 #[tauri::command]
-pub fn get_available_postgresql_versions() -> Result<Vec<PostgresqlVersionInfo>, String> {
-    fetcher::get_available_postgresql_versions()
+pub async fn get_available_postgresql_versions(app_handle: AppHandle) -> Result<Vec<PostgresqlVersionInfo>, String> {
+    fetcher::get_available_postgresql_versions_async(app_handle).await
 }
 
 #[tauri::command]

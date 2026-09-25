@@ -9,6 +9,9 @@ pub mod process_manager;
 pub mod service_manager;
 pub mod detector_base;
 pub mod http_client;
+pub mod runtime_switcher;
+pub mod auto_update;
+pub mod env;
 pub mod plugin;
 pub mod mysql;
 pub mod postgresql;
@@ -18,6 +21,8 @@ pub mod jetbrains;
 pub mod java;
 pub mod software;
 pub mod download_control;
+pub mod remote_version_cache;
+pub mod system_info;
 
 use plugin::PluginManager;
 use tauri::{
@@ -88,6 +93,16 @@ fn export_logs(content: String) -> Result<String, String> {
         return Err("日志为空，无可导出内容".to_string());
     }
 
+    // 限制导出内容大小（最大 10MB），防止磁盘耗尽
+    const MAX_EXPORT_BYTES: usize = 10 * 1024 * 1024;
+    if trimmed.len() > MAX_EXPORT_BYTES {
+        return Err(format!(
+            "日志内容过大 ({} 字节，上限 {} 字节)",
+            trimmed.len(),
+            MAX_EXPORT_BYTES
+        ));
+    }
+
     let base_dir = download_control::devtools_log_dir();
     std::fs::create_dir_all(&base_dir)
         .map_err(|e| format!("创建日志目录失败: {}", e))?;
@@ -128,19 +143,58 @@ fn get_log_dir() -> String {
     download_control::devtools_log_dir().to_string_lossy().to_string()
 }
 
+/// 判断目标路径是否位于任一允许的基础目录之下（含等于基础目录本身）。
+/// 双方都先 canonicalize 再做前缀匹配，消除 `..`、符号链接、8.3 短名等绕过手段；
+/// `Path::starts_with` 按路径组件匹配，天然免疫 `C:\foo\bar2` 冒充 `C:\foo\bar`。
+fn is_path_allowed(target: &std::path::Path, allowed_bases: &[std::path::PathBuf]) -> bool {
+    let target_canonical = match target.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    allowed_bases.iter().any(|base| {
+        base.canonicalize()
+            .map(|b| target_canonical.starts_with(b))
+            .unwrap_or(false)
+    })
+}
+
 /// 在资源管理器中打开指定路径。
 /// 若 path 指向文件，则打开其父目录；若 path 指向目录则直接打开。
+/// 安全限制：仅允许打开 DevTools 自身目录、下载目录、日志目录下的路径，
+/// 防止前端通过此命令暴露任意系统敏感目录。
 #[tauri::command]
 fn open_in_folder(path: String) -> Result<(), String> {
     let p = std::path::PathBuf::from(&path);
     if !p.exists() {
         return Err(format!("路径不存在: {}", path));
     }
+
+    // 安全检查：仅允许打开 DevTools 相关目录
     let open_target = if p.is_file() {
-        p.parent().map(|parent| parent.to_path_buf()).unwrap_or(p)
+        p.parent().map(|parent| parent.to_path_buf()).unwrap_or(p.clone())
     } else {
-        p
+        p.clone()
     };
+
+    // 获取允许的基础目录列表
+    let mut allowed_bases: Vec<std::path::PathBuf> = Vec::new();
+
+    // DevTools 下载目录
+    allowed_bases.push(download_control::devtools_download_dir());
+    // DevTools 日志目录
+    allowed_bases.push(download_control::devtools_log_dir());
+    // 应用自身目录（可执行文件所在目录）
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            allowed_bases.push(parent.to_path_buf());
+        }
+    }
+
+    // 检查目标路径是否在允许的目录下
+    if !is_path_allowed(&open_target, &allowed_bases) {
+        return Err("不允许打开此路径".to_string());
+    }
+
     #[cfg(windows)]
     {
         let _ = std::process::Command::new("explorer.exe")
@@ -176,11 +230,53 @@ fn cancel_download(task_id: String) -> Result<(), String> {
     download_control::cancel_task(&task_id)
 }
 
+/// 将前端配置 JSON 导出为文件，保存到「下载/DevTools/config」，返回完整路径
+#[tauri::command]
+fn export_config(content: String) -> Result<String, String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Err("配置内容为空，无可导出".to_string());
+    }
+
+    // 限制导出内容大小（最大 5MB），防止磁盘耗尽
+    const MAX_EXPORT_BYTES: usize = 5 * 1024 * 1024;
+    if trimmed.len() > MAX_EXPORT_BYTES {
+        return Err(format!(
+            "配置内容过大 ({} 字节，上限 {} 字节)",
+            trimmed.len(),
+            MAX_EXPORT_BYTES
+        ));
+    }
+
+    let base_dir = download_control::devtools_config_dir();
+    std::fs::create_dir_all(&base_dir)
+        .map_err(|e| format!("创建配置目录失败: {}", e))?;
+
+    let unix_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let file_path = base_dir.join(format!("devtools-config-{}.json", unix_secs));
+
+    std::fs::write(&file_path, trimmed)
+        .map_err(|e| format!("写入配置文件失败: {}", e))?;
+
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(&base_dir)
+            .spawn();
+    }
+
+    Ok(file_path.to_string_lossy().to_string())
+}
+
 /// 全局命令名列表（与 global_invoke_handler 中注册的命令一一对应）
 const GLOBAL_COMMANDS: &[&str] = &[
     "is_running_as_admin",
     "relaunch_as_admin",
     "export_logs",
+    "export_config",
     "get_tool_list",
     "get_download_dir",
     "get_log_dir",
@@ -188,6 +284,9 @@ const GLOBAL_COMMANDS: &[&str] = &[
     "pause_download",
     "resume_download",
     "cancel_download",
+    "set_default_runtime_command",
+    "check_for_updates",
+    "get_system_info",
 ];
 
 /// 全局命令处理器（非插件提供）
@@ -196,6 +295,7 @@ fn global_invoke_handler() -> Box<dyn Fn(Invoke<Wry>) -> bool + Send + Sync + 's
         is_running_as_admin,
         relaunch_as_admin,
         export_logs,
+        export_config,
         get_tool_list,
         get_download_dir,
         get_log_dir,
@@ -203,6 +303,9 @@ fn global_invoke_handler() -> Box<dyn Fn(Invoke<Wry>) -> bool + Send + Sync + 's
         pause_download,
         resume_download,
         cancel_download,
+        runtime_switcher::set_default_runtime_command,
+        auto_update::check_for_updates,
+        system_info::get_system_info,
     ])
 }
 
@@ -224,6 +327,7 @@ pub fn run() {
     plugin_mgr.register(Box::new(node::NodePlugin));
     plugin_mgr.register(Box::new(jetbrains::JetBrainsPlugin));
     plugin_mgr.register(Box::new(java::JavaPlugin));
+    plugin_mgr.register(Box::new(env::EnvPlugin));
     plugin_mgr.register(Box::new(software::SoftwarePlugin));
 
     // 构建命令路由表：命令名 -> handler 索引（O(1) 查找）
@@ -309,4 +413,85 @@ pub fn run() {
             // MessageBoxA 返回后仍要退出（非 0 退出码便于脚本捕获）
             std::process::exit(1);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_path_allowed;
+    use std::path::PathBuf;
+
+    /// 在系统临时目录下创建独立的测试目录树，返回 (base, base/sub, allowed_evil 同前缀干扰目录)。
+    /// name 用于隔离并行执行的各测试用例，避免互相删除目录。
+    fn setup_dirs(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("devtools_test_{}_{}", std::process::id(), name));
+        let base = root.join("allowed");
+        let sub = base.join("nested").join("deep");
+        let impostor = root.join("allowed_evil"); // 与 base 共享字符串前缀但非子目录
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(&impostor).unwrap();
+        (base, sub, impostor)
+    }
+
+    fn teardown(base: &std::path::Path) {
+        if let Some(root) = base.parent().and_then(|p| p.parent()) {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn allows_base_dir_itself() {
+        let (base, _sub, _impostor) = setup_dirs("base_itself");
+        assert!(is_path_allowed(&base, &[base.clone()]));
+        teardown(&base);
+    }
+
+    #[test]
+    fn allows_nested_subdirectory() {
+        let (base, sub, _impostor) = setup_dirs("nested_sub");
+        assert!(is_path_allowed(&sub, &[base.clone()]));
+        teardown(&base);
+    }
+
+    #[test]
+    fn rejects_string_prefix_impostor_dir() {
+        // allowed_evil 与 allowed 共享字符串前缀，但按路径组件匹配必须拒绝
+        let (base, _sub, impostor) = setup_dirs("impostor");
+        assert!(!is_path_allowed(&impostor, &[base.clone()]));
+        teardown(&base);
+    }
+
+    #[test]
+    fn rejects_dotdot_traversal() {
+        // base/../allowed_evil canonicalize 后落在白名单外
+        let (base, _sub, impostor) = setup_dirs("dotdot");
+        let traversal = base.join("..").join("allowed_evil");
+        assert!(!is_path_allowed(&traversal, &[base.clone()]));
+        // 自我校验：traversal 解析后确实等于 impostor
+        assert_eq!(traversal.canonicalize().unwrap(), impostor.canonicalize().unwrap());
+        teardown(&base);
+    }
+
+    #[test]
+    fn rejects_unrelated_system_dir() {
+        let (base, _sub, _impostor) = setup_dirs("unrelated");
+        let system_dir = std::env::temp_dir().join("..").canonicalize().unwrap();
+        assert!(!is_path_allowed(&system_dir, &[base.clone()]));
+        teardown(&base);
+    }
+
+    #[test]
+    fn rejects_nonexistent_target() {
+        let (base, _sub, _impostor) = setup_dirs("ghost_target");
+        let ghost = base.join("does_not_exist_at_all");
+        assert!(!is_path_allowed(&ghost, &[base.clone()]));
+        teardown(&base);
+    }
+
+    #[test]
+    fn rejects_when_base_cannot_be_canonicalized() {
+        let (base, sub, _impostor) = setup_dirs("ghost_base");
+        let ghost_base = base.parent().unwrap().join("nonexistent_base_dir");
+        assert!(!is_path_allowed(&sub, &[ghost_base]));
+        teardown(&base);
+    }
 }

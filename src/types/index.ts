@@ -41,26 +41,37 @@ export type { JetBrainsVersionDetail } from './generated/JetBrainsVersionDetail'
 export type { JetBrainsResidueScanResult } from './generated/JetBrainsResidueScanResult'
 export type { ToolFeature } from './generated/ToolFeature'
 export type { ToolInfo } from './generated/ToolInfo'
+export type { UpdateInfo } from './generated/UpdateInfo'
+export type { EnvPath } from './generated/EnvPath'
+export type { EnvVariable } from './generated/EnvVariable'
+export type { PathConflict } from './generated/PathConflict'
+export type { SystemInfo } from './generated/SystemInfo'
 
 // ===== 前端独有类型（不来自后端 IPC） =====
 
-/** 应用设置（前端本地存储） */
+/** 应用设置（前端本地存储，与 appStore.ts 中的 AppSettings 保持一致） */
 export interface AppSettings {
-  theme: 'light' | 'dark'
-  language: 'zh-CN' | 'en-US'
-  downloadDir: string
-  autoUpdate: boolean
-  concurrentDownloads: number
-  logMaxEntries: number
+  // 外观
+  themeColor: string            // 对应 PRESET_COLORS.key；'custom' 表示自定义
+  customThemeColor: string      // 自定义主题色 HEX（仅 themeColor==='custom' 时生效）
+
+  // 通用
+  autoRefresh: boolean
+  autoCheckUpdate: boolean   // 启动时自动检查应用更新
+  skipDangerConfirm: boolean    // 跳过危险操作（卸载/清残留/密码重置）二次确认
+
+  // 下载
+  autoOpenDownloadFolder: boolean
+
+  // 日志
+  showLogTimestamps: boolean
+  logMaxEntries: number         // 日志面板最大条数
 }
 
 /** 日志条目（前端日志面板用，与后端 LogMessage 对齐但增加本地字段） */
 export interface LogEntry {
   id: number
-  level: string
+  type: string                  // 日志级别：'info' | 'warn' | 'error' | 'success'
   message: string
   timestamp: string
 }
-
-/** 下载状态枚举 */
-export type DownloadStatus = 'idle' | 'downloading' | 'paused' | 'completed' | 'failed' | 'canceled'

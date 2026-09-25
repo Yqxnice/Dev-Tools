@@ -1,5 +1,4 @@
 <script setup lang="ts" generic="TInstance, TResult">
-import { computed } from 'vue'
 import { NCard, NEmpty, NAlert } from 'naive-ui'
 import { usePermission } from '../../composables/usePermission'
 
@@ -49,6 +48,7 @@ const props = withDefaults(defineProps<{
 }>(), {
   busy: false,
   emptyText: '未检测到可清理的实例，请先执行版本检测',
+  instanceKey: undefined,
 })
 
 const emit = defineEmits<{
@@ -66,49 +66,98 @@ function isSelected(inst: TInstance): boolean {
 
 <template>
   <div class="feature-panel feature-panel-wide">
-    <n-alert v-if="!perm.can('dangerous')" type="warning" :bordered="false" class="mb-3">
-      <template #header>需要管理员权限</template>请以管理员身份运行程序后再使用此功能
+    <n-alert
+      v-if="!perm.can('dangerous')"
+      type="warning"
+      :bordered="false"
+      class="mb-3"
+    >
+      <template #header>
+        需要管理员权限
+      </template>请以管理员身份运行程序后再使用此功能
     </n-alert>
 
-    <div class="feature-header" style="display:block">
+    <div
+      class="feature-header"
+      style="display:block"
+    >
       <h3>{{ title }}</h3>
       <p>{{ description }}</p>
     </div>
 
     <!-- 实例选择器 -->
-    <div v-if="instances.length > 0" style="margin-bottom:16px">
+    <div
+      v-if="instances.length > 0"
+      class="instances-section"
+    >
       <slot name="before-instances" />
-      <div class="section-label">选择实例</div>
-      <transition-group name="pick-list" tag="div" class="instance-pick-list" :appear="false">
-        <div v-for="(inst, idx) in instances"
+      <div class="section-label">
+        选择实例
+      </div>
+      <transition-group
+        name="pick-list"
+        tag="div"
+        class="instance-pick-list"
+        :appear="false"
+      >
+        <div
+          v-for="(inst, idx) in instances"
           :key="instanceKey ? instanceKey(inst) : idx"
           :class="['instance-pick-item', { active: isSelected(inst) }]"
-          @click="emit('update:selected', inst)">
+          @click="emit('update:selected', inst)"
+        >
           <div class="instance-pick-body">
-            <slot name="instance-label" :inst="inst" :index="idx" />
+            <slot
+              name="instance-label"
+              :inst="inst"
+              :index="idx"
+            />
           </div>
-          <div v-if="isSelected(inst)" class="instance-pick-check">✓</div>
+          <div
+            v-if="isSelected(inst)"
+            class="instance-pick-check"
+          >
+            ✓
+          </div>
         </div>
       </transition-group>
     </div>
-    <n-empty v-else :description="emptyText" />
+    <n-empty
+      v-else
+      :description="emptyText"
+    />
 
     <!-- 扫描结果（仅当 scanResult 存在时显示） -->
-    <n-card v-if="scanResult" size="small" class="scan-box">
-      <slot name="scan-result" :result="scanResult" />
+    <n-card
+      v-if="scanResult"
+      size="small"
+      class="scan-box"
+    >
+      <slot
+        name="scan-result"
+        :result="scanResult"
+      />
     </n-card>
 
     <!-- 清理选项（MySQL 专用） -->
     <template v-if="selected && $slots['clean-options']">
-      <div class="section-label" style="margin-top:16px">清理选项</div>
+      <div class="section-label clean-options-label">
+        清理选项
+      </div>
       <div class="clean-grid">
         <slot name="clean-options" />
       </div>
     </template>
 
     <!-- 操作按钮区：选中实例即可操作（卸载后产品虽从列表消失，但选中态保留以继续清理残留） -->
-    <div v-if="selected" class="action-bar">
-      <slot name="actions" :busy="busy" />
+    <div
+      v-if="selected"
+      class="action-bar"
+    >
+      <slot
+        name="actions"
+        :busy="busy"
+      />
     </div>
 
     <!-- 弹窗等额外 UI -->
@@ -117,9 +166,11 @@ function isSelected(inst: TInstance): boolean {
 </template>
 
 <style scoped>
-.scan-box { margin-bottom: 16px; }
-.action-bar { display: flex; gap: 10px; margin: 16px 0; }
-.clean-grid { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.scan-box { margin-bottom: var(--spacing-4); }
+.action-bar { display: flex; gap: var(--spacing-3); margin: var(--spacing-4) 0; }
+.clean-grid { display: flex; flex-direction: column; gap: var(--spacing-2); margin-bottom: var(--spacing-4); }
+.instances-section { margin-bottom: var(--spacing-4); }
+.clean-options-label { margin-top: var(--spacing-4); }
 
 /* 实例选择器项的增删过渡 */
 .pick-list-enter-active,
