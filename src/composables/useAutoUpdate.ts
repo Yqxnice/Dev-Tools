@@ -36,7 +36,9 @@ export function useAutoUpdate() {
     checking.value = true
     try {
       const info = await appService.checkForUpdates()
-      updateInfo.value = info
+      // 仅在有新版本时写入 updateInfo（App.vue 弹窗显隐依赖 updateInfo !== null）；
+      // 无更新时置 null，避免启动静默检查弹窗闪现、手动检查误弹"发现新版本"
+      updateInfo.value = info.has_update ? info : null
       lastChecked.value = Date.now()
       if (info.has_update) {
         log.addLog('info', `检测到新版本 v${info.latest_version}（当前 v${info.current_version}）`)
