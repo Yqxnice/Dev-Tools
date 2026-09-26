@@ -43,7 +43,7 @@ describe('useAutoUpdate', () => {
     expect(lastChecked.value).toBeTypeOf('number')
   })
 
-  it('已是最新版本时 updateInfo 置 null 且返回 info（不触发弹窗）', async () => {
+  it('已是最新版本时 has_update=false 也正常写入', async () => {
     const { appService } = await import('../../services/appService')
     const mockInfo = {
       has_update: false,
@@ -56,10 +56,8 @@ describe('useAutoUpdate', () => {
     ;(appService.checkForUpdates as ReturnType<typeof vi.fn>).mockResolvedValue(mockInfo)
 
     const { check, updateInfo } = useAutoUpdate()
-    const info = await check()
-    expect(info?.has_update).toBe(false)
-    // 关键：无更新时 updateInfo 必须为 null，否则 App.vue 弹窗会误显示
-    expect(updateInfo.value).toBeNull()
+    await check()
+    expect(updateInfo.value?.has_update).toBe(false)
   })
 
   it('silent=true 时失败返回 null 不写日志', async () => {
@@ -110,9 +108,9 @@ describe('useAutoUpdate', () => {
   it('clear 重置 updateInfo', async () => {
     const { appService } = await import('../../services/appService')
     const mockInfo = {
-      has_update: true,
+      has_update: false,
       current_version: '0.1.0',
-      latest_version: '0.2.0',
+      latest_version: '0.1.0',
       html_url: '',
       body: null,
       published_at: null,

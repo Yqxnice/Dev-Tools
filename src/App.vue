@@ -51,9 +51,13 @@ const {
 } = useDisclaimer(async () => {
   await initApp()
   // 启动后自动检查应用更新（受 autoCheckUpdate 设置控制）
-  // check() 仅在 has_update 时才写入 updateInfo，弹窗不会因"已是最新"而闪现
   if (app.settings.autoCheckUpdate) {
-    void autoUpdate.check(true)
+    void autoUpdate.check(true).then((info) => {
+      // 仅当有更新时，updateInfo 内部已写入并触发弹窗显示
+      if (info && !info.has_update) {
+        clearUpdate()
+      }
+    })
   }
 })
 
