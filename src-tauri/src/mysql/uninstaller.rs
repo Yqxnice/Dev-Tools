@@ -3,9 +3,36 @@ use super::super::{detector_base, logger, process_manager, service_manager};
 use std::collections::HashMap;
 use tauri::AppHandle;
 
+/// 校验服务确实属于 MySQL/MariaDB。
+///
+/// `process_manager::validate_service_name` 只保证字符集合法（`WinDefend`
+/// 也能通过），因此必须再按服务自身的二进制路径做归属判定，否则前端
+/// 可指定任意服务名让它被停止/删除。
+/// 返回 `Ok(Some(bin_dir))` 表示确认归属；`Ok(None)` 表示服务不存在（可安全跳过）。
+pub async fn assert_mysql_service(service: &str) -> Result<Option<String>, String> {
+    process_manager::validate_service_name(service)?;
+    match service_manager::get_service_binary_path(service).await {
+        None => Ok(None),
+        Some(bin) => {
+            let lower = bin.to_lowercase();
+            if lower.contains("mysql") || lower.contains("mariadb") {
+                Ok(Some(bin))
+            } else {
+                Err(format!(
+                    "服务 {} 不是 MySQL/MariaDB 服务（二进制路径: {}），已拒绝操作",
+                    service, bin
+                ))
+            }
+        }
+    }
+}
+
 pub async fn stop_mysql_services(app_handle: &AppHandle, services: Vec<String>) -> Result<(), String> {
     for service in &services {
-        process_manager::validate_service_name(service)?;
+        if assert_mysql_service(service).await?.is_none() {
+            logger::info(app_handle, &format!("服务 {} 不存在，跳过停止", service));
+            continue;
+        }
         if let Err(e) = service_manager::stop_service(app_handle, "MySQL", service).await {
             logger::warn(app_handle, &format!("停止服务 {} 失败: {}", service, e));
         }
@@ -16,7 +43,10 @@ pub async fn stop_mysql_services(app_handle: &AppHandle, services: Vec<String>) 
 
 pub async fn remove_mysql_services(app_handle: &AppHandle, services: Vec<String>) -> Result<(), String> {
     for service in &services {
-        process_manager::validate_service_name(service)?;
+        if assert_mysql_service(service).await?.is_none() {
+            logger::info(app_handle, &format!("服务 {} 不存在，跳过删除", service));
+            continue;
+        }
         match service_manager::delete_service(service).await {
             Ok(()) => logger::info(app_handle, &format!("服务 {} 已删除", service)),
             Err(e) => logger::warn(app_handle, &format!("删除服务 {} 失败: {}", service, e)),

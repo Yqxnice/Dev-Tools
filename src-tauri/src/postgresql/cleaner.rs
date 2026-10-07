@@ -1,11 +1,54 @@
+//! PostgreSQL 实例残留扫描与清理：注册表 / PATH / 开始菜单 / 服务 / 数据目录。
+//!
+//! 动态参数一律通过环境变量注入 PowerShell（`$env:KEY`），
+//! 公共执行原语复用 [`crate::db_common`]。
+
 use super::uninstaller;
 use super::super::{detector_base, logger, process_manager, types::PostgresqlInstance};
 use super::super::types::{CleanOptions, CleanResult, CleanScanResult, ScannedPath};
+use crate::db_common::{run_powershell_lines_with_env, run_powershell_with_env};
+use crate::delete_safety::{validate_deletable_dir, validate_registry_key, DeletionRules};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
 const EXCLUDED_NOTE: &str = "仅清理所选实例相关残留；不清理其他版本实例及自定义 data_directory";
+
+/// 允许删除其**子键**的注册表根（键必须严格位于其下）
+const ALLOWED_REGISTRY_PREFIXES: &[&str] = &[
+    r"HKLM\SYSTEM\CurrentControlSet\Services",
+    r"HKLM\SOFTWARE\PostgreSQL",
+    r"HKLM\SOFTWARE\WOW6432Node\PostgreSQL",
+    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+    r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+];
+
+/// 允许**整键删除**的产品根键
+const ALLOWED_REGISTRY_EXACT: &[&str] = &[r"HKCU\SOFTWARE\PostgreSQL"];
+
+/// 安装目录删除规则：路径必须能证明属于 PostgreSQL。
+fn install_dir_rules() -> DeletionRules {
+    DeletionRules::new().keywords(&["postgres", "pgsql", "edb"])
+}
+
+/// 数据目录只允许删除**标准安装位置**（`%ProgramData%\PostgreSQL` 等）。
+///
+/// 与 `EXCLUDED_NOTE` 承诺的"不清理自定义 data_directory"保持一致：
+/// 数据目录一旦误删不可恢复，而本工具**不做任何备份**（见 DISCLAIMER.md），
+/// 因此自定义位置的一律跳过。
+fn allowed_data_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for var in ["ProgramData", "PROGRAMDATA"] {
+        if let Ok(v) = std::env::var(var) {
+            if !v.is_empty() {
+                roots.push(PathBuf::from(&v).join("PostgreSQL"));
+                roots.push(PathBuf::from(&v).join("edb"));
+                break;
+            }
+        }
+    }
+    roots
+}
 
 #[derive(Debug, Clone)]
 pub struct InstanceTargets {
@@ -78,9 +121,14 @@ async fn scan_registry_keys_for_instance(
 
     if options.clean_registry_services {
         if let Some(svc) = &targets.service_name {
-            let key = format!(r"HKLM\SYSTEM\CurrentControlSet\Services\{}", svc);
-            if registry_key_exists(&key).await {
-                keys.push(key);
+            // 服务名来自前端，先做字符集校验；归属校验在删除服务/进程处进行
+            if let Err(e) = process_manager::validate_service_name(svc) {
+                eprintln!("[WARN] 跳过非法服务名: {}", e);
+            } else {
+                let key = format!(r"HKLM\SYSTEM\CurrentControlSet\Services\{}", svc);
+                if registry_key_exists(&key).await {
+                    keys.push(key);
+                }
             }
         }
     }
@@ -89,8 +137,11 @@ async fn scan_registry_keys_for_instance(
     if options.clean_registry_mysql_ab {
         let mut env_vars = HashMap::new();
         env_vars.insert("MAJOR_VER".into(), targets.major_version.clone());
+        // 空版本号会让 `-like "*"` / `-match ""` 恒真，命中该根键下**所有**版本
         let script = r#"
             $ver = $env:MAJOR_VER
+            $hasVer = -not [string]::IsNullOrWhiteSpace($ver)
+            if (-not $hasVer) { exit 0 }
             $roots = @(
                 'HKLM:\SOFTWARE\PostgreSQL\Installations',
                 'HKLM:\SOFTWARE\WOW6432Node\PostgreSQL\Installations'
@@ -116,6 +167,7 @@ async fn scan_registry_keys_for_instance(
         env_vars.insert("MAJOR_VER".into(), targets.major_version.clone());
         let script = r#"
             $ver = $env:MAJOR_VER
+            if ([string]::IsNullOrWhiteSpace($ver)) { exit 0 }
             $roots = @(
                 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
                 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
@@ -142,28 +194,6 @@ async fn scan_registry_keys_for_instance(
     keys.sort();
     keys.dedup();
     keys
-}
-
-async fn run_powershell_with_env(script: &str, env_vars: &HashMap<String, String>) -> String {
-    let mut command = tokio::process::Command::new("powershell");
-    command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script]);
-    for (key, value) in env_vars {
-        command.env(key, value);
-    }
-    #[cfg(target_os = "windows")]
-    {
-        command.creation_flags(0x08000000);
-    }
-    match tokio::time::timeout(std::time::Duration::from_secs(30), command.output()).await {
-        Ok(Ok(output)) => String::from_utf8_lossy(&output.stdout).to_string(),
-        Ok(Err(_)) => String::new(),
-        Err(_) => String::new(),
-    }
-}
-
-async fn run_powershell_lines_with_env(script: &str, env_vars: &HashMap<String, String>) -> Vec<String> {
-    let output = run_powershell_with_env(script, env_vars).await;
-    output.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
 }
 
 async fn scan_path_entries_for_instance(targets: &InstanceTargets) -> Vec<String> {
@@ -197,8 +227,10 @@ async fn scan_path_entries_for_instance(targets: &InstanceTargets) -> Vec<String
 async fn scan_start_menu_shortcuts(targets: &InstanceTargets) -> Vec<String> {
     let mut env_vars = HashMap::new();
     env_vars.insert("MAJOR_VER".into(), targets.major_version.clone());
+    // 空版本号会让 `-match ""` 恒真，返回 PostgreSQL 下**所有**版本目录
     let script = r#"
         $ver = $env:MAJOR_VER
+        if ([string]::IsNullOrWhiteSpace($ver)) { exit 0 }
         $paths = @(
             [Environment]::GetFolderPath('CommonPrograms'),
             [Environment]::GetFolderPath('Programs')
@@ -215,6 +247,56 @@ async fn scan_start_menu_shortcuts(targets: &InstanceTargets) -> Vec<String> {
         $shortcuts
     "#;
     run_powershell_lines_with_env(script, &env_vars).await
+}
+
+/// 开始菜单删除白名单：必须是 CommonPrograms/Programs 的**直接子目录**，
+/// 且目录名以 `PostgreSQL` 开头（脚本扫描出的就是这一层）。
+fn validate_start_menu_dir(raw: &str) -> Result<PathBuf, String> {
+    if raw.contains("..") || raw.contains('*') || raw.contains('?') {
+        return Err("路径含通配符或上级引用".to_string());
+    }
+    let canonical = Path::new(raw)
+        .canonicalize()
+        .map_err(|e| format!("无法解析路径: {}", e))?;
+    if !canonical.is_dir() {
+        return Err("目标不是目录".to_string());
+    }
+
+    let mut bases: Vec<PathBuf> = Vec::new();
+    for var in ["APPDATA", "PROGRAMDATA"] {
+        if let Ok(v) = std::env::var(var) {
+            bases.push(
+                PathBuf::from(v)
+                    .join("Microsoft")
+                    .join("Windows")
+                    .join("Start Menu")
+                    .join("Programs"),
+            );
+        }
+    }
+    if bases.is_empty() {
+        return Err("无法定位开始菜单目录".to_string());
+    }
+
+    let parent = canonical
+        .parent()
+        .ok_or_else(|| "无法解析父目录".to_string())?;
+    if !bases
+        .iter()
+        .filter_map(|b| b.canonicalize().ok())
+        .any(|b| parent == b)
+    {
+        return Err("不是开始菜单的直接子目录".to_string());
+    }
+
+    let name = canonical
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if !name.to_lowercase().starts_with("postgresql") {
+        return Err(format!("目录名不是 PostgreSQL 相关: {}", name));
+    }
+    Ok(canonical)
 }
 
 async fn registry_key_exists(key: &str) -> bool {
@@ -293,22 +375,35 @@ async fn kill_instance_processes(app_handle: &AppHandle, result: &mut CleanResul
     };
 
     if let Some(svc) = &targets.service_name {
-        logger::info(app_handle, &format!("终止实例服务进程: {}", svc));
-        if let Ok(output) = process_manager::execute_command("sc", &["queryex", svc]).await {
-            if output.exit_code == 0 {
-                for line in output.stdout.lines() {
-                    let trimmed = line.trim();
-                    if let Some(pid_str) = trimmed.strip_prefix("PID") {
-                        let pid = pid_str.trim().trim_start_matches(':').trim();
-                        if !pid.is_empty() && pid != "0" {
-                            match process_manager::execute_command("taskkill", &["/F", "/PID", pid]).await {
-                                Ok(out) if out.exit_code == 0 => {
-                                    result.cleaned_items.push(format!("已终止实例进程 PID {} (服务 {})", pid, svc));
+        // 归属校验：service_name 来自前端，仅靠字符集校验不足以阻止
+        // 指定任意服务并 taskkill 其 PID
+        match uninstaller::assert_postgresql_service(svc).await {
+            Ok(None) => {
+                logger::info(app_handle, &format!("服务 {} 不存在，跳过进程终止", svc));
+            }
+            Err(e) => {
+                result.errors.push(e.clone());
+                logger::warn(app_handle, &e);
+            }
+            Ok(Some(_)) => {
+                logger::info(app_handle, &format!("终止实例服务进程: {}", svc));
+                if let Ok(output) = process_manager::execute_command("sc", &["queryex", svc]).await {
+                    if output.exit_code == 0 {
+                        for line in output.stdout.lines() {
+                            let trimmed = line.trim();
+                            if let Some(pid_str) = trimmed.strip_prefix("PID") {
+                                let pid = pid_str.trim().trim_start_matches(':').trim();
+                                if !pid.is_empty() && pid != "0" && pid.chars().all(|c| c.is_ascii_digit()) {
+                                    match process_manager::execute_command("taskkill", &["/F", "/PID", pid]).await {
+                                        Ok(out) if out.exit_code == 0 => {
+                                            result.cleaned_items.push(format!("已终止实例进程 PID {} (服务 {})", pid, svc));
+                                        }
+                                        Ok(out) => {
+                                            result.errors.push(format!("终止 PID {} 失败: {}", pid, out.stderr.trim()));
+                                        }
+                                        Err(e) => result.errors.push(format!("终止 PID {} 异常: {}", pid, e)),
+                                    }
                                 }
-                                Ok(out) => {
-                                    result.errors.push(format!("终止 PID {} 失败: {}", pid, out.stderr.trim()));
-                                }
-                                Err(e) => result.errors.push(format!("终止 PID {} 异常: {}", pid, e)),
                             }
                         }
                     }
@@ -355,20 +450,55 @@ async fn remove_instance_directories(
             logger::info(app_handle, &format!("目录不存在，跳过: {}", dir.path));
             continue;
         }
-        match tokio::fs::remove_dir_all(&dir.path).await {
+        // 安全校验（原实现直接 remove_dir_all，且 data_dir 完全来自前端 IPC）：
+        // - install_dir：关键词归属证明
+        // - program_data(data_dir)：仅允许标准 ProgramData 位置，自定义 datadir 跳过
+        let rules = match dir.category.as_str() {
+            "program_data" => {
+                let roots = allowed_data_roots();
+                if roots.is_empty() {
+                    result.errors.push(format!(
+                        "无法定位标准数据目录根，已跳过: {}",
+                        dir.path
+                    ));
+                    continue;
+                }
+                DeletionRules::new().allowed_roots(roots)
+            }
+            _ => install_dir_rules(),
+        };
+        let canonical = match validate_deletable_dir(&dir.path, &rules) {
+            Ok(p) => p,
+            Err(e) => {
+                let msg = format!("已阻止删除 [{}] {}: {}", dir.category, dir.path, e);
+                if dir.category == "program_data" {
+                    // 自定义 datadir 属于"按设计跳过"，不算失败
+                    logger::info(app_handle, &msg);
+                } else {
+                    logger::warn(app_handle, &msg);
+                    result.errors.push(msg);
+                }
+                continue;
+            }
+        };
+        let target = canonical.to_string_lossy().to_string();
+        match tokio::fs::remove_dir_all(&canonical).await {
             Ok(_) => {
-                result.cleaned_items.push(format!("删除目录 [{}]: {}", dir.category, dir.path));
-                logger::info(app_handle, &format!("已删除: {}", dir.path));
+                result.cleaned_items.push(format!("删除目录 [{}]: {}", dir.category, target));
+                logger::info(app_handle, &format!("已删除: {}", target));
             }
             Err(e) => {
-                result.errors.push(format!("无法删除 {}: {}", dir.path, e));
-                logger::warn(app_handle, &format!("删除失败 {}: {}", dir.path, e));
+                result.errors.push(format!("无法删除 {}: {}", target, e));
+                logger::warn(app_handle, &format!("删除失败 {}: {}", target, e));
             }
         }
     }
 }
 
 async fn delete_registry_key(_app_handle: &AppHandle, key: &str) -> Result<(), String> {
+    // 删除前白名单校验：拒绝白名单之外的根键及根键本身
+    validate_registry_key(key, ALLOWED_REGISTRY_PREFIXES, ALLOWED_REGISTRY_EXACT)?;
+
     let reg_result = process_manager::execute_command("reg", &["delete", key, "/f"]).await;
     if let Ok(output) = reg_result {
         if output.exit_code == 0 {
@@ -416,6 +546,12 @@ async fn clean_start_menu_shortcuts(app_handle: &AppHandle, result: &mut CleanRe
         return;
     }
     for path in shortcuts {
+        if let Err(e) = validate_start_menu_dir(&path) {
+            let msg = format!("已阻止删除开始菜单路径 {}: {}", path, e);
+            logger::warn(app_handle, &msg);
+            result.errors.push(msg);
+            continue;
+        }
         match tokio::fs::remove_dir_all(&path).await {
             Ok(_) => {
                 result.cleaned_items.push(format!("删除开始菜单快捷方式目录: {}", path));

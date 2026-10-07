@@ -151,7 +151,7 @@ pub async fn detect_jetbrains(app_handle: AppHandle) -> Result<Vec<JetBrainsInst
     }
 
     // 按 product_name 排序，便于前端展示
-    installs.sort_by(|a, b| a.product_name.to_lowercase().cmp(&b.product_name.to_lowercase()));
+    installs.sort_by_key(|a| a.product_name.to_lowercase());
 
     logger::info(
         &app_handle,

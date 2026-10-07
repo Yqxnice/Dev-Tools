@@ -1,5 +1,10 @@
-use super::super::{detector_base, logger, process_manager, types};
+//! PostgreSQL postgres 密码重置 / 修改工作流：pg_hba.conf 备份 → 信任模式切换 →
+//! ALTER USER → 恢复 pg_hba.conf 与原服务，异常中断时自动回滚。
+//! 公共等待原语复用 [`crate::db_common`]。
+
+use super::super::{logger, process_manager, types};
 use super::detector;
+use crate::db_common::{wait_for_port_ready, wait_for_service_state};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
@@ -13,42 +18,42 @@ pub fn validate_password_strength(password: &str) -> Result<(), String> {
     process_manager::validate_password_strength(password).map_err(|e| e.to_user_message())
 }
 
-/// 轮询等待服务达到目标状态
-async fn wait_for_service_state(
-    app_handle: &AppHandle,
-    service_name: &str,
-    running: bool,
-    timeout_secs: u64,
-) -> bool {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        let status = crate::service_manager::check_service_status(service_name).await;
-        let reached = if running { status == detector_base::STATUS_RUNNING } else { status != detector_base::STATUS_RUNNING };
-        if reached { return true; }
-        if tokio::time::Instant::now() >= deadline {
-            logger::warn(app_handle, &format!("等待服务 {} 状态超时（当前: {}）", service_name, status));
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-}
+/// 经 **stdin** 向 `psql` 传递 SQL，替代 `-c`。
+///
+/// 含密码的 `ALTER USER ... PASSWORD '...'` 走 `-c` 会出现在进程命令行里，
+/// 而命令行对本机同用户会话内的任意进程可见（`Win32_Process.CommandLine`）。
+/// psql 在 stdin 非终端时按批处理模式执行，退出码语义与 `-c` 一致。
+///
+/// 密码本身通过 `PGPASSWORD` 环境变量传给 psql（PostgreSQL 官方推荐做法，
+/// 环境变量不会出现在命令行参数中）。
+async fn run_psql_with_stdin(
+    psql: &str,
+    base_args: &[&str],
+    sql: &str,
+    password_env: Option<&str>,
+) -> Result<std::process::Output, String> {
+    use tokio::io::AsyncWriteExt;
 
-/// 轮询等待端口可连接
-async fn wait_for_port_ready(app_handle: &AppHandle, port: u16, timeout_secs: u64) -> bool {
-    use tokio::net::TcpStream;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        let connect = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            TcpStream::connect(("127.0.0.1", port)),
-        ).await;
-        if matches!(connect, Ok(Ok(_))) { return true; }
-        if tokio::time::Instant::now() >= deadline {
-            logger::warn(app_handle, &format!("等待端口 {} 就绪超时", port));
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let mut cmd = tokio::process::Command::new(psql);
+    cmd.args(base_args);
+    if let Some(pw) = password_env {
+        cmd.env("PGPASSWORD", pw);
     }
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let mut child = cmd.spawn().map_err(|e| format!("启动 psql 失败: {}", e))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(sql.as_bytes()).await;
+        let _ = stdin.shutdown().await;
+    }
+    child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("等待 psql 输出失败: {}", e))
 }
 
 /// 查找 pg_hba.conf 文件（与 postgresql.conf 同目录）
@@ -211,11 +216,12 @@ pub async fn reset_postgresql_password(
 
     // 同目录临时备份（用于操作后自动恢复）
     let backup_path = pg_hba_path.with_extension("conf.bak.devtools");
-    tokio::fs::copy(&pg_hba_path, &backup_path).await
-        .map_err(|e| {
-            let _ = detector::start_postgresql_service(app_handle.clone(), service_name.clone());
-            format!("备份 pg_hba.conf 失败: {}", e)
-        })?;
+    // 注意：不能塞进 map_err——闭包不是 async，`start_postgresql_service`
+    // 的 future 会被直接丢弃，导致服务停在 stopped 状态无法拉起。
+    if let Err(e) = tokio::fs::copy(&pg_hba_path, &backup_path).await {
+        let _ = detector::start_postgresql_service(app_handle.clone(), service_name.clone()).await;
+        return Err(format!("备份 pg_hba.conf 失败: {}", e));
+    }
 
     let guard = PgHbaGuard {
         backup: Some(backup_path.clone()),
@@ -227,13 +233,12 @@ pub async fn reset_postgresql_password(
         host    all       all   127.0.0.1/32  trust\n\
         host    all       all   ::1/128      trust\n\
         local   all       all                  trust\n";
-    tokio::fs::write(&pg_hba_path, trust_config).await
-        .map_err(|e| {
-            let _ = std::fs::copy(&backup_path, &pg_hba_path);
-            let _ = std::fs::remove_file(&backup_path);
-            let _ = detector::start_postgresql_service(app_handle.clone(), service_name.clone());
-            format!("写入临时 pg_hba.conf 失败: {}", e)
-        })?;
+    if let Err(e) = tokio::fs::write(&pg_hba_path, trust_config).await {
+        let _ = std::fs::copy(&backup_path, &pg_hba_path);
+        let _ = std::fs::remove_file(&backup_path);
+        let _ = detector::start_postgresql_service(app_handle.clone(), service_name.clone()).await;
+        return Err(format!("写入临时 pg_hba.conf 失败: {}", e));
+    }
 
     // 3. 启动服务（加载 trust 配置）
     logger::info(&app_handle, "正在以 trust 认证模式启动 PostgreSQL 服务...");
@@ -266,23 +271,23 @@ pub async fn reset_postgresql_password(
     let alter_sql = format!("ALTER USER postgres PASSWORD '{}';", escaped);
 
     let psql_str = psql_path.to_str().unwrap_or("");
-    let args: Vec<String> = vec![
-        "-U".to_string(), "postgres".to_string(),
-        "-h".to_string(), "127.0.0.1".to_string(),
-        "-p".to_string(), port_to_check.to_string(),
-        "-c".to_string(), alter_sql,
+    let port_str = port_to_check.to_string();
+    let connect_args: &[&str] = &[
+        "-U", "postgres", "-h", "127.0.0.1", "-p", port_str.as_str(),
     ];
-    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-
-    let result = process_manager::execute_command(psql_str, &args_ref).await;
+    // SQL 含新密码 → 经 stdin 传递，绝不放进 -c（命令行对本机任意进程可见）
+    let result = run_psql_with_stdin(psql_str, connect_args, &alter_sql, None).await;
     let mut sql_success = false;
     match result {
         Ok(output) => {
-            if output.exit_code == 0 {
+            if output.status.code() == Some(0) {
                 sql_success = true;
                 logger::info(&app_handle, "密码修改 SQL 执行成功！");
             } else {
-                logger::error(&app_handle, &format!("SQL 执行失败: {}", output.stderr));
+                logger::error(&app_handle, &format!(
+                    "SQL 执行失败: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
             }
         }
         Err(e) => {
@@ -436,17 +441,12 @@ pub async fn change_postgresql_password(
     let masked_sql = alter_sql.replace(&escaped, "***");
     logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_sql));
 
-    let mut alter_cmd = tokio::process::Command::new(psql_str);
-    alter_cmd.args(["-U", "postgres", "-h", "127.0.0.1", "-p", &port_str, "-c", &alter_sql]);
-    alter_cmd.env("PGPASSWORD", &old_password);
-    alter_cmd.stdout(std::process::Stdio::piped());
-    alter_cmd.stderr(std::process::Stdio::piped());
-    #[cfg(target_os = "windows")]
-    {
-        alter_cmd.creation_flags(0x08000000);
-    }
+    // SQL 含新密码 → 经 stdin 传递，绝不放进 -c（命令行对本机任意进程可见）；
+    // 认证密码走 PGPASSWORD 环境变量（PostgreSQL 官方推荐）
+    let alter_args: &[&str] = &["-U", "postgres", "-h", "127.0.0.1", "-p", port_str.as_str()];
+    let alter_result = run_psql_with_stdin(psql_str, alter_args, &alter_sql, Some(&old_password)).await;
 
-    match alter_cmd.output().await {
+    match alter_result {
         Ok(output) => {
             if output.status.code() == Some(0) {
                 logger::info(&app_handle, "密码修改命令执行成功！");

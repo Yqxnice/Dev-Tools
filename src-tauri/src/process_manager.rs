@@ -42,6 +42,55 @@ pub async fn execute_command(cmd: &str, args: &[&str]) -> AppResult<ProcessOutpu
     execute_command_with_timeout(cmd, args, 30).await
 }
 
+/// 执行命令，并把 `stdin_data` 经管道写入子进程标准输入。
+///
+/// **为什么需要它**：Windows 上同用户会话内的任意进程都能通过
+/// `Win32_Process.CommandLine` 读到别的进程的完整命令行。SQL 中若含密码
+/// （如 `ALTER USER ... IDENTIFIED BY 'xxx'`）走 `-e` 就等于把密码广播给
+/// 本机所有进程；`psql`/`mysql` 的 `-p<密码>` 同理。改走 stdin 后参数里
+/// 只剩不含秘密的连接信息。
+///
+/// stdout/stderr 照常被捕获，语义与 [`execute_command_with_timeout`] 一致。
+pub async fn execute_command_with_stdin(
+    cmd: &str,
+    args: &[&str],
+    stdin_data: &str,
+    timeout_secs: u64,
+) -> AppResult<ProcessOutput> {
+    use tokio::io::AsyncWriteExt;
+
+    let mut command = Command::new(cmd);
+    command.args(args);
+    command.stdin(std::process::Stdio::piped());
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    hide_console_window(&mut command);
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| AppError::CommandExecution(format!("启动命令失败: {}", e)))?;
+
+    // 写 stdin 失败（子进程提前退出）不视为致命错误：
+    // 真正的失败信息由下面的 wait_with_output 收集到 stderr
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(stdin_data.as_bytes()).await;
+        let _ = stdin.shutdown().await;
+    }
+
+    let output = timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
+        .await
+        .map_err(|_| AppError::CommandExecution(format!("命令执行超时 ({}秒)", timeout_secs)))?
+        .map_err(|e| AppError::CommandExecution(format!("等待命令输出失败: {}", e)))?;
+
+    Ok(ProcessOutput {
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        exit_code: output.status.code().unwrap_or(-1),
+    })
+}
+
 /// 执行 PowerShell 脚本，动态参数通过环境变量传入（避免字符串拼接导致的命令注入）
 pub async fn execute_powershell_env(
     script: &str,
@@ -162,6 +211,13 @@ pub fn validate_password_strength(password: &str) -> AppResult<()> {
     if password.len() > 128 {
         return Err(AppError::Validation("密码长度不能超过128个字符".to_string()));
     }
+    // 控制字符无法安全地表达在 MySQL 选项文件 / 连接串 / 脚本里，
+    // 一旦被写坏会变成"以为设置了密码，实际没设置"的静默故障 → 一律拒绝
+    if password.chars().any(|c| c.is_control()) {
+        return Err(AppError::Validation(
+            "密码不能包含控制字符（换行、制表符、NUL 等）".to_string(),
+        ));
+    }
 
     Ok(())
 }
@@ -216,5 +272,45 @@ mod tests {
         assert!(validate_password_strength("abcdefgh").is_ok()); // 只有字母但长度足够
         assert!(validate_password_strength("Abcdefg1").is_ok());
         assert!(validate_password_strength("Abc@1234").is_ok());
+    }
+
+    #[test]
+    fn validate_password_strength_rejects_control_chars() {
+        // 选项文件 / 连接串无法安全表达控制字符，必须整体拒绝（fail closed）
+        assert!(validate_password_strength("abcdef\n").is_err());
+        assert!(validate_password_strength("abcdef\r").is_err());
+        assert!(validate_password_strength("abc\ndef123").is_err());
+        assert!(validate_password_strength("abcdef\t").is_err());
+        assert!(validate_password_strength("abc\0def").is_err());
+    }
+
+    #[test]
+    fn validate_password_strength_rejects_overlong() {
+        assert!(validate_password_strength("a".repeat(129).as_str()).is_err());
+        assert!(validate_password_strength("a".repeat(128).as_str()).is_ok());
+    }
+
+    /// stdin 走管道，不占命令行参数 —— 这是隐藏 SQL/密码的关键路径
+    #[tokio::test]
+    async fn execute_command_with_stdin_feeds_child_process() {
+        let out = execute_command_with_stdin("findstr", &["^"], "hello\r\nworld\r\n", 10)
+            .await
+            .expect("命令应能执行");
+        assert_eq!(out.exit_code, 0, "findstr 匹配到行时退出码应为 0");
+        assert!(out.stdout.contains("hello"), "stdout: {}", out.stdout);
+        assert!(out.stdout.contains("world"), "stdout: {}", out.stdout);
+    }
+
+    #[tokio::test]
+    async fn execute_command_with_stdin_reports_nonexistent_binary() {
+        let err = execute_command_with_stdin(
+            "definitely-not-existing-xyz-98765",
+            &[],
+            "",
+            5,
+        )
+        .await
+        .expect_err("不存在的命令应返回 Err");
+        assert!(err.to_string().contains("启动命令失败"));
     }
 }

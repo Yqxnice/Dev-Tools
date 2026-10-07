@@ -251,14 +251,50 @@ pub fn log_detect_complete(app: Option<&AppHandle>, tool_name: &str, count: usiz
     }
 }
 
-/// 选择目标实例：优先使用用户选中的，否则取第一个同时有路径和服务名的实例
+/// 归一化路径用于比较：去掉引号/尾随分隔符，统一小写。
+fn normalize_path(p: &str) -> String {
+    p.trim()
+        .trim_matches('"')
+        .trim_end_matches(['\\', '/'])
+        .to_lowercase()
+}
+
+/// 两个路径是否指向同一位置（大小写、尾随 `\`、引号不敏感）。
+fn same_path(a: &str, b: &str) -> bool {
+    !a.trim().is_empty() && normalize_path(a) == normalize_path(b)
+}
+
+/// 校验「用户前端选中、但探测结果里找不到对应项」的实例。
+///
+/// 该实例随后会被用于 `net stop <service>`、拼接 `psql.exe`/`mysql.exe` 等操作，
+/// 服务名与安装路径必须先过真实校验，不能直接信任 IPC 输入。
+fn validate_selected_instance<T: DbInstance>(sel: &T, tool_name: &str) -> Result<(), String> {
+    if normalize_path(sel.get_path()).is_empty() {
+        return Err(format!("所选 {} 实例缺少安装路径", tool_name));
+    }
+    match sel.get_service_name() {
+        Some(service) => crate::process_manager::validate_service_name(service)
+            .map_err(|e| format!("所选 {} 实例服务名非法: {}", tool_name, e)),
+        None => Err(format!("所选 {} 实例没有服务名，无法操作", tool_name)),
+    }
+}
+
+/// 选择目标实例：优先使用用户选中的，否则取第一个同时有路径和服务名的实例。
+///
+/// 前端选中的实例只是「候选」：先尝试在实际探测结果 `instances` 中按安装路径
+/// 找回权威数据；找不到时才使用前端数据，且必须先通过
+/// [`validate_selected_instance`] 的路径/服务名校验。
 pub fn select_valid_instance<'a, T: DbInstance>(
     selected: Option<&'a T>,
     instances: &'a [T],
     tool_name: &str,
 ) -> Result<&'a T, String> {
-    if let Some(inst) = selected {
-        return Ok(inst);
+    if let Some(sel) = selected {
+        if let Some(detected) = instances.iter().find(|i| same_path(i.get_path(), sel.get_path())) {
+            return Ok(detected);
+        }
+        validate_selected_instance(sel, tool_name)?;
+        return Ok(sel);
     }
     instances
         .iter()
@@ -269,4 +305,146 @@ pub fn select_valid_instance<'a, T: DbInstance>(
                 tool_name
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone, Debug, Default)]
+    struct Fake {
+        path: String,
+        version: String,
+        architecture: String,
+        status: String,
+        service_name: Option<String>,
+        port: Option<u16>,
+        is_residual: bool,
+    }
+
+    impl Fake {
+        fn new(path: &str, service: Option<&str>) -> Self {
+            Self {
+                path: path.to_string(),
+                version: "8.0".to_string(),
+                architecture: "x64".to_string(),
+                status: "stopped".to_string(),
+                service_name: service.map(str::to_string),
+                port: Some(3306),
+                is_residual: false,
+            }
+        }
+    }
+
+    impl DbInstance for Fake {
+        fn get_path(&self) -> &str {
+            &self.path
+        }
+        fn set_path(&mut self, path: String) {
+            self.path = path;
+        }
+        fn get_version(&self) -> &str {
+            &self.version
+        }
+        fn set_version(&mut self, v: String) {
+            self.version = v;
+        }
+        fn get_architecture(&self) -> &str {
+            &self.architecture
+        }
+        fn set_architecture(&mut self, a: String) {
+            self.architecture = a;
+        }
+        fn get_status(&self) -> &str {
+            &self.status
+        }
+        fn set_status(&mut self, s: String) {
+            self.status = s;
+        }
+        fn get_service_name(&self) -> Option<&str> {
+            self.service_name.as_deref()
+        }
+        fn set_service_name(&mut self, n: Option<String>) {
+            self.service_name = n;
+        }
+        fn get_port(&self) -> Option<u16> {
+            self.port
+        }
+        fn set_port(&mut self, p: Option<u16>) {
+            self.port = p;
+        }
+        fn get_is_residual(&self) -> bool {
+            self.is_residual
+        }
+        fn set_is_residual(&mut self, r: bool) {
+            self.is_residual = r;
+        }
+    }
+
+    #[test]
+    fn path_comparison_ignores_case_quotes_and_trailing_slash() {
+        assert!(same_path(
+            r"C:\Program Files\MySQL\MySQL Server 8.0\",
+            r#""c:\program files\mysql\mysql server 8.0""#
+        ));
+        assert!(!same_path(r"C:\a", r"C:\b"));
+        assert!(!same_path("", r"C:\a"));
+        assert!(!same_path("   ", r"C:\a"));
+    }
+
+    #[test]
+    fn selected_is_returned_when_no_detected_match() {
+        let sel = Fake::new(r"D:\MySQL", Some("MySQL80"));
+        let detected = vec![Fake::new(r"C:\MySQL", Some("MySQL57"))];
+        let picked = select_valid_instance(Some(&sel), &detected, "MySQL").unwrap();
+        assert_eq!(picked.get_path(), r"D:\MySQL");
+    }
+
+    #[test]
+    fn detected_instance_overrides_same_path_selection() {
+        let sel = Fake::new(r"C:\MySQL\", Some("SpoofedService"));
+        let detected = vec![Fake::new(r"C:\MySQL", Some("MySQL80"))];
+        let picked = select_valid_instance(Some(&sel), &detected, "MySQL").unwrap();
+        assert_eq!(picked.get_service_name(), Some("MySQL80"));
+    }
+
+    #[test]
+    fn selected_without_path_is_rejected() {
+        let sel = Fake::new("   ", Some("MySQL80"));
+        let err = select_valid_instance(Some(&sel), &[], "MySQL").unwrap_err();
+        assert!(err.contains("缺少安装路径"), "{}", err);
+    }
+
+    #[test]
+    fn selected_without_service_is_rejected() {
+        let sel = Fake::new(r"D:\MySQL", None);
+        let err = select_valid_instance(Some(&sel), &[], "MySQL").unwrap_err();
+        assert!(err.contains("没有服务名"), "{}", err);
+    }
+
+    #[test]
+    fn selected_with_illegal_service_name_is_rejected() {
+        let sel = Fake::new(r"D:\MySQL", Some("MySQL80 & net user evil /add"));
+        let err = select_valid_instance(Some(&sel), &[], "MySQL").unwrap_err();
+        assert!(err.contains("服务名非法"), "{}", err);
+    }
+
+    #[test]
+    fn fallback_picks_first_detected_instance_with_path_and_service() {
+        let detected = vec![
+            Fake::new("", None),
+            Fake::new(r"C:\MySQL", None),
+            Fake::new(r"C:\MySQL2", Some("MySQL81")),
+            Fake::new(r"C:\MySQL3", Some("MySQL82")),
+        ];
+        let picked = select_valid_instance(None, &detected, "MySQL").unwrap();
+        assert_eq!(picked.get_service_name(), Some("MySQL81"));
+    }
+
+    #[test]
+    fn fallback_errors_when_no_valid_instance() {
+        let detected = vec![Fake::new(r"C:\MySQL", None)];
+        let err = select_valid_instance(None, &detected, "MySQL").unwrap_err();
+        assert!(err.contains("未找到有效的 MySQL 实例"), "{}", err);
+    }
 }

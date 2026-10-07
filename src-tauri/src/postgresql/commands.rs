@@ -1,6 +1,7 @@
 //! PostgreSQL 工具的 IPC 命令定义
 
 use crate::access;
+use crate::maintenance_lock::{self, Scope};
 use crate::process_manager;
 use crate::types::*;
 use tauri::{AppHandle, Window};
@@ -36,6 +37,7 @@ pub async fn uninstall_postgresql(
     services: Option<Vec<String>>,
     instances: Option<Vec<PostgresqlInstance>>,
 ) -> Result<(), String> {
+    let _maintenance = maintenance_lock::try_acquire(Scope::Postgresql)?;
     access::require_admin()?;
     let services = services.unwrap_or_default();
     if services.is_empty() {
@@ -61,6 +63,7 @@ pub async fn clean_postgresql_residuals(
     selected_instance: PostgresqlInstance,
     options: Option<CleanOptions>,
 ) -> Result<CleanResult, String> {
+    let _maintenance = maintenance_lock::try_acquire(Scope::Postgresql)?;
     access::require_admin()?;
     Ok(cleaner::clean_postgresql_residuals(app_handle, selected_instance, options.unwrap_or_default()).await)
 }
@@ -72,6 +75,7 @@ pub async fn reset_postgresql_password(
     selected_instance: Option<PostgresqlInstance>,
     override_port: Option<u16>,
 ) -> Result<String, String> {
+    let _maintenance = maintenance_lock::try_acquire(Scope::Postgresql)?;
     access::require_admin()?;
     password_reset::reset_postgresql_password(app_handle, new_password, selected_instance, override_port).await
 }
@@ -84,18 +88,21 @@ pub async fn change_postgresql_password(
     selected_instance: Option<PostgresqlInstance>,
     override_port: Option<u16>,
 ) -> Result<String, String> {
+    let _maintenance = maintenance_lock::try_acquire(Scope::Postgresql)?;
     access::require_admin()?;
     password_reset::change_postgresql_password(app_handle, old_password, new_password, selected_instance, override_port).await
 }
 
 #[tauri::command]
 pub async fn start_postgresql_service(app_handle: AppHandle, service_name: String) -> Result<(), String> {
+    let _maintenance = maintenance_lock::try_acquire(Scope::Postgresql)?;
     process_manager::validate_service_name(&service_name)?;
     detector::start_postgresql_service(app_handle, service_name).await
 }
 
 #[tauri::command]
 pub async fn stop_postgresql_service(app_handle: AppHandle, service_name: String) -> Result<(), String> {
+    let _maintenance = maintenance_lock::try_acquire(Scope::Postgresql)?;
     process_manager::validate_service_name(&service_name)?;
     detector::stop_postgresql_service(app_handle, service_name).await
 }

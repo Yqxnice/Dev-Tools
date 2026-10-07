@@ -1,5 +1,9 @@
-use super::super::{detector_base, logger, process_manager, types};
+//! MySQL root 密码重置 / 修改工作流：skip-grant-tables 临时实例 → ALTER USER → 恢复原服务，
+//! 失败时自动回滚（终止临时实例并重启原服务）。公共等待原语复用 [`crate::db_common`]。
+
+use super::super::{logger, process_manager, types};
 use super::detector;
+use crate::db_common::{wait_for_port_ready, wait_for_service_state};
 use std::path::PathBuf;
 use tauri::AppHandle;
 
@@ -26,22 +30,80 @@ impl Drop for TempConfigGuard {
     }
 }
 
-/// 创建临时 MySQL 配置文件，避免密码出现在进程参数中
+/// MySQL 选项文件（`.cnf`）中的值转义。
+///
+/// 不转义会导致密码里的 `#`、`;`、空格被选项解析器当作分隔符/注释，
+/// 实际连接用的密码与调用方以为的不一致（静默连不上，或连到意外语义）。
+/// 双引号包裹 + 转义 `\` 和 `"` 是 MySQL 选项文件的通用做法。
+fn escape_option_file_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// 创建临时 MySQL 配置文件，避免密码出现在进程参数中。
+///
+/// 文件名带时间戳 + 进程内自增序号：同一进程内并发调用（重置流程中
+/// 多次连接测试）不能共用同一路径，否则后写入的内容会覆盖前者。
+fn next_temp_config_path() -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    std::env::temp_dir().join(format!(
+        "devtools_mysql_{}_{}_{}.cnf",
+        std::process::id(),
+        nanos,
+        seq
+    ))
+}
+
 async fn create_temp_mysql_config(password: &str) -> Result<TempConfigGuard, String> {
-    let temp_dir = std::env::temp_dir();
-    let config_path = temp_dir.join(format!("devtools_mysql_{}.cnf", std::process::id()));
-    let config_content = format!("[client]\nuser=root\npassword={}\n", password);
-    tokio::fs::write(&config_path, &config_content).await
+    let config_path = next_temp_config_path();
+    let config_content = format!(
+        "[client]\nuser=root\npassword={}\n",
+        escape_option_file_value(password)
+    );
+    tokio::fs::write(&config_path, &config_content)
+        .await
         .map_err(|e| format!("创建临时配置文件失败: {}", e))?;
     Ok(TempConfigGuard::new(config_path))
+}
+
+/// 通过 **stdin** 把 SQL 交给 `mysql.exe` 执行。
+///
+/// 含密码的 SQL（`ALTER USER ... IDENTIFIED BY '...'`）绝不能走 `-e`：
+/// 命令行参数对同机任意进程可见（`Win32_Process.CommandLine`），
+/// 而 stdin 是私有管道。参数里只保留连接相关的无秘密信息。
+async fn run_mysql_sql(
+    mysql_path: &str,
+    base_args: &[String],
+    sql: &str,
+) -> Result<types::ProcessOutput, String> {
+    let args: Vec<&str> = base_args.iter().map(|s| s.as_str()).collect();
+    process_manager::execute_command_with_stdin(mysql_path, &args, sql, 60)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // 在 Windows 上隐藏控制台窗口，避免闪烁
 #[cfg(target_os = "windows")]
 fn hide_console_window(command: &mut tokio::process::Command) {
-    #[allow(unused_imports)]
-    use std::os::windows::process::CommandExt;
-    command.creation_flags(0x08000000);
+    command.creation_flags(0x08000000); // CREATE_NO_WINDOW
 }
 
 async fn stop_mysql_service(app_handle: &AppHandle, service_name: &str) -> Result<(), String> {
@@ -59,56 +121,6 @@ async fn stop_mysql_service(app_handle: &AppHandle, service_name: &str) -> Resul
     // 轮询等待服务真正进入停止状态（最多 30 秒），替代固定 sleep
     wait_for_service_state(app_handle, service_name, false, 30).await;
     Ok(())
-}
-
-/// 轮询等待服务达到目标状态（running=true 等待"启动"，running=false 等待"停止"/"未安装"）
-async fn wait_for_service_state(
-    app_handle: &AppHandle,
-    service_name: &str,
-    running: bool,
-    timeout_secs: u64,
-) -> bool {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        let status = crate::service_manager::check_service_status(service_name).await;
-        let reached = if running {
-            status == detector_base::STATUS_RUNNING
-        } else {
-            status != detector_base::STATUS_RUNNING
-        };
-        if reached {
-            return true;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            logger::warn(
-                app_handle,
-                &format!("等待服务 {} 状态超时（当前状态: {}）", service_name, status),
-            );
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-}
-
-/// 轮询等待端口可连接（用于确认服务已就绪接受连接）
-async fn wait_for_port_ready(app_handle: &AppHandle, port: u16, timeout_secs: u64) -> bool {
-    use tokio::net::TcpStream;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        let connect = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            TcpStream::connect(("127.0.0.1", port)),
-        )
-        .await;
-        if matches!(connect, Ok(Ok(_))) {
-            return true;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            logger::warn(app_handle, &format!("等待端口 {} 就绪超时", port));
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
 }
 
 /// 终止指定实例目录下的 mysqld/mysql 进程（按可执行文件路径精准匹配，
@@ -201,7 +213,7 @@ fn is_mysql_8_or_higher(version: &str) -> bool {
         .split('.')
         .next()
         .and_then(|s| s.parse::<u32>().ok())
-        .map_or(false, |m| m >= 8)
+        .is_some_and(|m| m >= 8)
 }
 
 /// 判断 MySQL 版本是否为 9.0 及以上。
@@ -211,7 +223,7 @@ fn is_mysql_9_or_higher(version: &str) -> bool {
         .split('.')
         .next()
         .and_then(|s| s.parse::<u32>().ok())
-        .map_or(false, |m| m >= 9)
+        .is_some_and(|m| m >= 9)
 }
 
 fn resolve_port(instance: &types::MySQLInstance, override_port: Option<u16>) -> Option<u16> {
@@ -634,10 +646,13 @@ pub async fn reset_mysql_password(
         }
     };
     
-    let result = process_manager::execute_command(
-        mysql_path_str,
-        &["-u", "root", "--protocol=memory", "-e", &full_sql]
-    ).await;
+    // SQL 含新密码 → 走 stdin，绝不放进 -e（命令行对本机任意进程可见）
+    let reset_args: Vec<String> = vec![
+        "-u".to_string(),
+        "root".to_string(),
+        "--protocol=memory".to_string(),
+    ];
+    let result = run_mysql_sql(mysql_path_str, &reset_args, &full_sql).await;
     
     let mut sql_success = false;
     match result {
@@ -869,14 +884,8 @@ pub async fn change_mysql_password(
     let masked_simple_sql = simple_sql.replace(&escape_mysql_password(&new_password), "***");
     logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_simple_sql));
     
-    // 执行修改
-    let mut modify_args = base_args.clone();
-    modify_args.push("-e".to_string());
-    modify_args.push(simple_sql.clone());
-    
-    let modify_args_ref: Vec<&str> = modify_args.iter().map(|s| s.as_str()).collect();
-    
-    let result = process_manager::execute_command(mysql_path_str, &modify_args_ref).await;
+    // 执行修改（SQL 含新密码 → stdin，避免出现在命令行参数中）
+    let result = run_mysql_sql(mysql_path_str, &base_args, &simple_sql).await;
 
     match result {
         Ok(output) if output.exit_code == 0 => {
@@ -913,13 +922,7 @@ pub async fn change_mysql_password(
                 let masked_fallback_sql = fallback_sql.replace(&escape_mysql_password(&new_password), "***");
                 logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_fallback_sql));
                 
-                let mut fallback_args = base_args.clone();
-                fallback_args.push("-e".to_string());
-                fallback_args.push(fallback_sql.clone());
-                
-                let fallback_args_ref: Vec<&str> = fallback_args.iter().map(|s| s.as_str()).collect();
-                
-                let fallback_result = process_manager::execute_command(mysql_path_str, &fallback_args_ref).await;
+                let fallback_result = run_mysql_sql(mysql_path_str, &base_args, &fallback_sql).await;
                 
                 match fallback_result {
                     Ok(fb_output) if fb_output.exit_code == 0 => {
@@ -954,13 +957,7 @@ pub async fn change_mysql_password(
                 let masked_old_sql = old_version_sql.replace(&escaped, "***");
                 logger::info(&app_handle, &format!("执行 SQL (密码已掩码): {}", masked_old_sql));
                 
-                let mut old_args = base_args.clone();
-                old_args.push("-e".to_string());
-                old_args.push(old_version_sql.clone());
-                
-                let old_args_ref: Vec<&str> = old_args.iter().map(|s| s.as_str()).collect();
-                
-                let old_result = process_manager::execute_command(mysql_path_str, &old_args_ref).await;
+                let old_result = run_mysql_sql(mysql_path_str, &base_args, &old_version_sql).await;
                 
                 match old_result {
                     Ok(old_output) if old_output.exit_code == 0 => {
@@ -993,6 +990,28 @@ pub async fn change_mysql_password(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_option_file_value_quotes_and_escapes() {
+        assert_eq!(escape_option_file_value("plain"), "\"plain\"");
+        assert_eq!(escape_option_file_value(r"a\b"), r#""a\\b""#);
+        assert_eq!(escape_option_file_value("he said \"hi\""), r#""he said \"hi\"""#);
+        // 不转义会让 `#` 之后的内容被 MySQL 选项解析器当作注释丢弃
+        assert_eq!(escape_option_file_value("p#ss"), "\"p#ss\"");
+        assert_eq!(escape_option_file_value("p;ss"), "\"p;ss\"");
+        assert_eq!(escape_option_file_value("a b"), "\"a b\"");
+        assert_eq!(escape_option_file_value("line\nbreak"), r#""line\nbreak""#);
+    }
+
+    #[test]
+    fn escape_option_file_value_roundtrips_backslashes_and_quotes() {
+        // 转义结果中引号必须已转义，不能提前终止字符串
+        let escaped = escape_option_file_value(r#"x"y\z"#);
+        assert!(escaped.starts_with('"') && escaped.ends_with('"'));
+        let inner = &escaped[1..escaped.len() - 1];
+        assert!(inner.contains(r#"\""#), "应包含转义后的引号: {}", inner);
+        assert!(inner.contains(r"\\"), "应包含转义后的反斜杠: {}", inner);
+    }
 
     #[test]
     fn escape_mysql_password_handles_special_chars() {

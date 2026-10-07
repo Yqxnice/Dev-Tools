@@ -35,6 +35,11 @@ pub trait ToolPlugin: Send + Sync {
     fn command_names(&self) -> &'static [&'static str];
 }
 
+/// 命令路由表：命令名 -> handler 在 handlers Vec 中的索引
+type CommandRoute = HashMap<&'static str, usize>;
+/// 按插件聚合的 IPC 命令处理器列表
+type CommandHandlers = Vec<Box<dyn Fn(Invoke<Wry>) -> bool + Send + Sync + 'static>>;
+
 #[derive(Default)]
 pub struct PluginManager {
     plugins: Vec<Box<dyn ToolPlugin>>,
@@ -64,15 +69,9 @@ impl PluginManager {
     /// 构建命令路由表：命令名 -> 对应 handler 在返回 Vec 中的索引。
     /// 调用方拿到 (route, handlers) 后，IPC 调用先 `route.get(command)` 命中索引，
     /// 再 `handlers[idx](invoke)`，避免线性遍历所有插件的 handler 闭包。
-    pub fn build_router(
-        &self,
-    ) -> (
-        HashMap<&'static str, usize>,
-        Vec<Box<dyn Fn(Invoke<Wry>) -> bool + Send + Sync + 'static>>,
-    ) {
-        let mut route: HashMap<&'static str, usize> = HashMap::new();
-        let mut handlers: Vec<Box<dyn Fn(Invoke<Wry>) -> bool + Send + Sync + 'static>> =
-            Vec::new();
+    pub fn build_router(&self) -> (CommandRoute, CommandHandlers) {
+        let mut route: CommandRoute = HashMap::new();
+        let mut handlers: CommandHandlers = Vec::new();
         for p in &self.plugins {
             let idx = handlers.len();
             handlers.push(p.invoke_handler());

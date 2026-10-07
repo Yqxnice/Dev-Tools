@@ -4,10 +4,12 @@ compile_error!("Dev Tools 仅支持 Windows 平台");
 pub mod access;
 pub mod types;
 pub mod error;
+pub mod delete_safety;
 pub mod logger;
 pub mod process_manager;
 pub mod service_manager;
 pub mod detector_base;
+pub mod db_common;
 pub mod http_client;
 pub mod runtime_switcher;
 pub mod auto_update;
@@ -21,6 +23,7 @@ pub mod jetbrains;
 pub mod java;
 pub mod software;
 pub mod download_control;
+pub mod maintenance_lock;
 pub mod remote_version_cache;
 pub mod system_info;
 
@@ -272,7 +275,7 @@ fn export_config(content: String) -> Result<String, String> {
 }
 
 /// 全局命令名列表（与 global_invoke_handler 中注册的命令一一对应）
-const GLOBAL_COMMANDS: &[&str] = &[
+pub const GLOBAL_COMMANDS: &[&str] = &[
     "is_running_as_admin",
     "relaunch_as_admin",
     "export_logs",
@@ -290,7 +293,7 @@ const GLOBAL_COMMANDS: &[&str] = &[
 ];
 
 /// 全局命令处理器（非插件提供）
-fn global_invoke_handler() -> Box<dyn Fn(Invoke<Wry>) -> bool + Send + Sync + 'static> {
+pub fn global_invoke_handler() -> Box<dyn Fn(Invoke<Wry>) -> bool + Send + Sync + 'static> {
     Box::new(tauri::generate_handler![
         is_running_as_admin,
         relaunch_as_admin,
@@ -441,14 +444,14 @@ mod tests {
     #[test]
     fn allows_base_dir_itself() {
         let (base, _sub, _impostor) = setup_dirs("base_itself");
-        assert!(is_path_allowed(&base, &[base.clone()]));
+        assert!(is_path_allowed(&base, std::slice::from_ref(&base)));
         teardown(&base);
     }
 
     #[test]
     fn allows_nested_subdirectory() {
         let (base, sub, _impostor) = setup_dirs("nested_sub");
-        assert!(is_path_allowed(&sub, &[base.clone()]));
+        assert!(is_path_allowed(&sub, std::slice::from_ref(&base)));
         teardown(&base);
     }
 
@@ -456,7 +459,7 @@ mod tests {
     fn rejects_string_prefix_impostor_dir() {
         // allowed_evil 与 allowed 共享字符串前缀，但按路径组件匹配必须拒绝
         let (base, _sub, impostor) = setup_dirs("impostor");
-        assert!(!is_path_allowed(&impostor, &[base.clone()]));
+        assert!(!is_path_allowed(&impostor, std::slice::from_ref(&base)));
         teardown(&base);
     }
 
@@ -465,7 +468,7 @@ mod tests {
         // base/../allowed_evil canonicalize 后落在白名单外
         let (base, _sub, impostor) = setup_dirs("dotdot");
         let traversal = base.join("..").join("allowed_evil");
-        assert!(!is_path_allowed(&traversal, &[base.clone()]));
+        assert!(!is_path_allowed(&traversal, std::slice::from_ref(&base)));
         // 自我校验：traversal 解析后确实等于 impostor
         assert_eq!(traversal.canonicalize().unwrap(), impostor.canonicalize().unwrap());
         teardown(&base);
@@ -475,7 +478,7 @@ mod tests {
     fn rejects_unrelated_system_dir() {
         let (base, _sub, _impostor) = setup_dirs("unrelated");
         let system_dir = std::env::temp_dir().join("..").canonicalize().unwrap();
-        assert!(!is_path_allowed(&system_dir, &[base.clone()]));
+        assert!(!is_path_allowed(&system_dir, std::slice::from_ref(&base)));
         teardown(&base);
     }
 
@@ -483,7 +486,7 @@ mod tests {
     fn rejects_nonexistent_target() {
         let (base, _sub, _impostor) = setup_dirs("ghost_target");
         let ghost = base.join("does_not_exist_at_all");
-        assert!(!is_path_allowed(&ghost, &[base.clone()]));
+        assert!(!is_path_allowed(&ghost, std::slice::from_ref(&base)));
         teardown(&base);
     }
 

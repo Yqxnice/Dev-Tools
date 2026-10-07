@@ -72,7 +72,7 @@ pub async fn get_available_java_versions(
     }
 
     // 按 feature_version 倒序（最新在前）
-    result.sort_by(|a, b| b.feature_version.cmp(&a.feature_version));
+    result.sort_by_key(|a| std::cmp::Reverse(a.feature_version));
 
     logger::info(
         &app_handle,

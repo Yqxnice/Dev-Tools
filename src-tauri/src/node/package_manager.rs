@@ -65,15 +65,12 @@ pub async fn list_installed_packages(
         Ok(output) => {
             // npm ls 在存在未满足依赖时会以非零退出，但仍可能输出 JSON
             if output.stdout.trim().starts_with('{') {
-                match parse_npm_ls_json(&output.stdout) {
-                    Ok(packages) => {
-                        logger::info(
-                            &app_handle,
-                            &format!("获取完成（部分依赖警告），共 {} 个全局包", packages.len()),
-                        );
-                        return Ok(packages);
-                    }
-                    Err(_) => {}
+                if let Ok(packages) = parse_npm_ls_json(&output.stdout) {
+                    logger::info(
+                        &app_handle,
+                        &format!("获取完成（部分依赖警告），共 {} 个全局包", packages.len()),
+                    );
+                    return Ok(packages);
                 }
             }
             let stderr = output.stderr.trim();
@@ -117,7 +114,7 @@ fn parse_npm_ls_json(stdout: &str) -> Result<Vec<NodePackage>, String> {
     }
 
     // 按名称排序
-    packages.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    packages.sort_by_key(|a| a.name.to_lowercase());
     Ok(packages)
 }
 

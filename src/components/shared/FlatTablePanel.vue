@@ -1,4 +1,5 @@
 <script setup lang="ts" generic="TItem">
+import { NButton,NEmpty } from 'naive-ui';
 /**
  * 平铺表格面板：通用列表容器，承载"列表 + 空态"类页面。
  *

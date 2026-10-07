@@ -3,9 +3,36 @@ use super::super::{detector_base, logger, process_manager, service_manager};
 use std::collections::HashMap;
 use tauri::AppHandle;
 
+/// 校验服务确实属于 PostgreSQL。
+///
+/// `validate_service_name` 只保证字符集合法，前端仍可指定任意服务名；
+/// 必须再按服务自身的二进制路径做归属判定。
+/// 返回 `Ok(Some(bin))` 表示确认归属；`Ok(None)` 表示服务不存在（可安全跳过）。
+pub async fn assert_postgresql_service(service: &str) -> Result<Option<String>, String> {
+    process_manager::validate_service_name(service)?;
+    match service_manager::get_service_binary_path(service).await {
+        None => Ok(None),
+        Some(bin) => {
+            let lower = bin.to_lowercase();
+            if lower.contains("postgres") || lower.contains("pgsql") || lower.contains("\\edb\\")
+            {
+                Ok(Some(bin))
+            } else {
+                Err(format!(
+                    "服务 {} 不是 PostgreSQL 服务（二进制路径: {}），已拒绝操作",
+                    service, bin
+                ))
+            }
+        }
+    }
+}
+
 pub async fn stop_postgresql_services(app_handle: &AppHandle, services: Vec<String>) -> Result<(), String> {
     for service in &services {
-        process_manager::validate_service_name(service)?;
+        if assert_postgresql_service(service).await?.is_none() {
+            logger::info(app_handle, &format!("服务 {} 不存在，跳过停止", service));
+            continue;
+        }
         if let Err(e) = service_manager::stop_service(app_handle, "PostgreSQL", service).await {
             logger::warn(app_handle, &format!("停止服务 {} 失败: {}", service, e));
         }
@@ -15,7 +42,10 @@ pub async fn stop_postgresql_services(app_handle: &AppHandle, services: Vec<Stri
 
 pub async fn remove_postgresql_services(app_handle: &AppHandle, services: Vec<String>) -> Result<(), String> {
     for service in &services {
-        process_manager::validate_service_name(service)?;
+        if assert_postgresql_service(service).await?.is_none() {
+            logger::info(app_handle, &format!("服务 {} 不存在，跳过删除", service));
+            continue;
+        }
         match service_manager::delete_service(service).await {
             Ok(()) => logger::info(app_handle, &format!("服务 {} 已删除", service)),
             Err(e) => logger::warn(app_handle, &format!("删除服务 {} 失败: {}", service, e)),
@@ -154,7 +184,7 @@ pub async fn uninstall_selected_postgresql(
                     crate::service_manager::get_service_binary_path(service).await
                         .and_then(|_| {
                             // 尝试从服务名提取：postgresql-x64-16 → "16"
-                            service.split('-').last().filter(|s| s.chars().all(|c| c.is_ascii_digit())).map(|s| s.to_string())
+                            service.split('-').next_back().filter(|s| s.chars().all(|c| c.is_ascii_digit())).map(|s| s.to_string())
                         })
                         .unwrap_or(known_version)
                 } else {
@@ -164,7 +194,7 @@ pub async fn uninstall_selected_postgresql(
             }
             None => {
                 // 即使没有 bin_dir，也尝试从服务名提取版本号来过滤卸载
-                let v = service.split('-').last()
+                let v = service.split('-').next_back()
                     .filter(|s| s.chars().all(|c| c.is_ascii_digit()))
                     .map(|s| s.to_string())
                     .unwrap_or_default();

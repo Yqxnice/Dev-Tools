@@ -14,7 +14,7 @@ use crate::http_client;
 use crate::error::AppError;
 
 /// HTML 响应体最大字节数（1MB），防止恶意站点返回超大内容导致内存耗尽
-const MAX_HTML_BODY_BYTES: usize = 1 * 1024 * 1024;
+const MAX_HTML_BODY_BYTES: usize = 1024 * 1024;
 
 /// 检查 URL 是否指向内网/保留地址（SSRF 防护）
 fn is_private_or_reserved_ip(url: &reqwest::Url) -> bool {
@@ -293,7 +293,7 @@ pub async fn resolve_software_icon(page_url: String) -> Result<Option<String>, S
     // 2. 先直接尝试 favicon.ico（快速路径：几 KB 文件，不需要下载整个页面）
     //    大部分站点都有 /favicon.ico，成功即可直接返回，避免下载 1-2MB HTML。
     if let Ok(favicon_url) = parsed.join("/favicon.ico") {
-        if let Ok((mime, bytes)) = try_download_icon(&client, &favicon_url).await {
+        if let Ok((mime, bytes)) = try_download_icon(client, &favicon_url).await {
             let ext = match mime.rsplit('/').next().unwrap_or("ico") {
                 "svg+xml" => "svg".to_string(),
                 "jpeg" => "jpg".to_string(),
@@ -351,7 +351,7 @@ pub async fn resolve_software_icon(page_url: String) -> Result<Option<String>, S
         let mut urls = Vec::new();
         for (priority, url) in &candidates {
             if *priority == 3 {
-                if let Some(icon_url) = resolve_manifest(&client, url).await {
+                if let Some(icon_url) = resolve_manifest(client, url).await {
                     urls.push(icon_url);
                 }
             }
@@ -369,7 +369,7 @@ pub async fn resolve_software_icon(page_url: String) -> Result<Option<String>, S
 
     // 3. 依次尝试候选 URL
     for icon_url in ordered {
-        if let Ok((mime, bytes)) = try_download_icon(&client, &icon_url).await {
+        if let Ok((mime, bytes)) = try_download_icon(client, &icon_url).await {
             let ext = match mime.rsplit('/').next().unwrap_or("ico") {
                 "svg+xml" => "svg".to_string(),
                 "jpeg" => "jpg".to_string(),
@@ -429,12 +429,107 @@ async fn find_executable_in_path(executable: &str) -> Option<String> {
     stdout.lines().next().map(|s| s.trim().to_string())
 }
 
+/// 作为"版本探测"被禁止的解释器/系统工具。
+/// 这些可执行文件配合任意参数等价于任意命令执行。
+const BANNED_DETECT_EXECUTABLES: &[&str] = &[
+    "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe", "wscript",
+    "wscript.exe", "cscript", "cscript.exe", "mshta", "mshta.exe", "rundll32",
+    "rundll32.exe", "regsvr32", "regsvr32.exe", "certutil", "certutil.exe", "bitsadmin",
+    "bitsadmin.exe", "schtasks", "schtasks.exe", "reg", "reg.exe", "net", "net.exe",
+    "sc", "sc.exe", "wmic", "wmic.exe", "bash", "sh", "zsh", "fish", "at", "at.exe",
+    "msiexec", "msiexec.exe", "control", "control.exe", "explorer", "explorer.exe",
+    "taskkill", "taskkill.exe", "robocopy", "robocopy.exe", "ftp", "ftp.exe", "telnet",
+    "telnet.exe",
+];
+
+/// 作为"版本探测参数"被禁止的 flag：这些会让解释器执行任意代码
+const BANNED_DETECT_ARGS: &[&str] = &[
+    "-c", "-e", "--eval", "--eval-string", "--command", "--exec", "--execute", "/c", "/k",
+    "/k", "-Command", "-EncodedCommand", "-enc", "-nop", "-noprobe",
+];
+
+/// 校验 `check_software_installed` 的可执行文件名。
+///
+/// 该命令在本进程（常为管理员令牌）下执行任意 `executable + args`，
+/// 因此必须把输入限制为"PATH 中的裸命令名 + 无害的版本参数"：
+/// - 拒绝路径分隔符/盘符/UNC —— 只能经 PATH 查找，无法指定任意文件
+/// - 拒绝解释器与系统工具 —— 否则 `cmd /c <任意>` 即任意命令执行
+fn validate_detect_executable(executable: &str) -> Result<String, String> {
+    let trimmed = executable.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation("可执行文件名不能为空".to_string()).to_string());
+    }
+    if trimmed.len() > 64 {
+        return Err(format!("可执行文件名过长（{} 字节）", trimmed.len()));
+    }
+    // 裸命令名：字母数字开头，其后允许 . _ -，不允许任何路径字符
+    let ok = trimmed
+        .chars()
+        .enumerate()
+        .all(|(i, c)| {
+            if i == 0 {
+                c.is_ascii_alphanumeric()
+            } else {
+                c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'
+            }
+        });
+    if !ok {
+        return Err(format!(
+            "可执行文件名必须是不含路径的命令名（仅字母数字 . _ -）: {}",
+            trimmed
+        ));
+    }
+    if trimmed.to_lowercase().ends_with(".exe") {
+        return Err("请省略 .exe 后缀".to_string());
+    }
+    if BANNED_DETECT_EXECUTABLES
+        .iter()
+        .any(|b| b.eq_ignore_ascii_case(trimmed))
+    {
+        return Err(format!("不允许执行系统解释器/工具: {}", trimmed));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 校验版本探测参数：仅允许形如 `--version` / `-v` / `version` 的短 flag。
+fn validate_detect_args(args: &[String]) -> Result<Vec<String>, String> {
+    if args.len() > 4 {
+        return Err(format!("探测参数过多（{} 个）", args.len()));
+    }
+    let mut out = Vec::with_capacity(args.len());
+    for arg in args {
+        let a = arg.trim();
+        if a.is_empty() {
+            return Err("探测参数不能为空".to_string());
+        }
+        if a.len() > 64 {
+            return Err(format!("探测参数过长: {}", a));
+        }
+        // 不允许空格、引号、元字符、路径字符 —— 排除 `echo hello`、`& calc` 等
+        if !a
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./,:=+".contains(c))
+        {
+            return Err(format!("探测参数含非法字符: {}", a));
+        }
+        if BANNED_DETECT_ARGS.iter().any(|b| b.eq_ignore_ascii_case(a)) {
+            return Err(format!("不允许执行型参数: {}", a));
+        }
+        out.push(a.to_string());
+    }
+    Ok(out)
+}
+
 /// 检测命令行工具是否已安装。
 ///
 /// 设计：通用命令，不耦合 software.json。前端按条目 detect 字段传入 executable+args。
 /// 1. PATH 中找不到 executable → installed=false, path=None
 /// 2. 找到 executable 但执行失败/非零退出 → installed=false, path=Some
 /// 3. 执行成功 → installed=true, version=stdout/stderr 第一行, path=Some
+///
+/// 安全约束（本命令带管理员令牌执行外部程序）：
+/// `executable` 必须是 PATH 中的裸命令名且不在系统工具黑名单中，
+/// `args` 必须是无空格无元字符的短 flag —— 否则任意输入即任意命令执行。
 ///
 /// 注意：部分工具（如 `java -version`）将版本号输出到 stderr，
 /// 这里同时检查 stdout 与 stderr 取第一行作为版本号。
@@ -443,9 +538,8 @@ pub async fn check_software_installed(
     executable: String,
     args: Vec<String>,
 ) -> Result<InstalledStatus, String> {
-    if executable.trim().is_empty() {
-        return Err(AppError::Validation("可执行文件名不能为空".to_string()).to_string());
-    }
+    let executable = validate_detect_executable(&executable)?;
+    let args = validate_detect_args(&args)?;
 
     let path = find_executable_in_path(&executable).await;
 
@@ -483,8 +577,8 @@ pub async fn check_software_installed(
     };
 
     Ok(InstalledStatus {
-        // 找到可执行文件即视为"已安装"——
-        // 即使 --version 命令失败，至少二进制文件存在于 PATH 中
+        // 与函数文档一致：仅当版本命令成功执行才视为已安装，
+        // 找到二进制但 --version 失败时 installed=false（path 仍返回）
         installed: version.is_some(),
         version,
         path,
@@ -578,12 +672,12 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn check_existing_command_version() {
-        // cmd 内置 echo 在 Windows 上能稳定返回 0
-        let status = super::check_software_installed("cmd".to_string(), vec!["/c".to_string(), "echo hello".to_string()])
+        // git 在开发机上必然存在；`cmd` 已被系统解释器黑名单拦截
+        let status = super::check_software_installed("git".to_string(), vec!["--version".to_string()])
             .await
             .expect("命令不应返回 Err");
         assert!(status.installed);
-        assert_eq!(status.version.as_deref(), Some("hello"));
+        assert!(status.version.is_some());
         assert!(status.path.is_some());
     }
 
@@ -606,5 +700,85 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("可执行文件名不能为空"));
+    }
+
+    #[test]
+    fn detect_executable_rejects_path_separator() {
+        assert!(super::validate_detect_executable(r"C:\Windows\System32\cmd").is_err());
+        assert!(super::validate_detect_executable(r"..\evil").is_err());
+        assert!(super::validate_detect_executable(r"\\share\mal").is_err());
+        assert!(super::validate_detect_executable("a/b").is_err());
+        // 盘符相对路径（冒号后无分隔符）与裸路径分隔符同样必须拒绝
+        assert!(super::validate_detect_executable("C:foo.exe").is_err());
+        assert!(super::validate_detect_executable(r"dir\foo").is_err());
+    }
+
+    #[test]
+    fn detect_executable_rejects_shell_interpreters() {
+        for banned in ["cmd", "powershell", "pwsh", "mshta", "rundll32", "certutil", "reg"] {
+            assert!(
+                super::validate_detect_executable(banned).is_err(),
+                "{} 应被拒绝",
+                banned
+            );
+        }
+    }
+
+    #[test]
+    fn detect_executable_accepts_plain_command_name() {
+        for ok in ["python", "git", "node", "redis-cli", "npm", "code"] {
+            assert_eq!(
+                super::validate_detect_executable(ok).unwrap(),
+                ok,
+                "{} 应被接受",
+                ok
+            );
+        }
+    }
+
+    #[test]
+    fn detect_executable_rejects_exe_suffix_and_long_names() {
+        assert!(super::validate_detect_executable("python.exe").is_err());
+        assert!(super::validate_detect_executable(&"a".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn detect_args_allow_version_flags() {
+        let args: Vec<String> = ["--version"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(super::validate_detect_args(&args).is_ok());
+        let args: Vec<String> = ["version"].iter().map(|s| s.to_string()).collect();
+        assert!(super::validate_detect_args(&args).is_ok());
+        let args: Vec<String> = ["-v"].iter().map(|s| s.to_string()).collect();
+        assert!(super::validate_detect_args(&args).is_ok());
+    }
+
+    #[test]
+    fn detect_args_reject_command_injection() {
+        let args: Vec<String> = ["/c", "echo", "hello"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(super::validate_detect_args(&args).is_err());
+
+        let args: Vec<String> = ["&&", "calc"].iter().map(|s| s.to_string()).collect();
+        assert!(super::validate_detect_args(&args).is_err());
+
+        // 空格 / 引号 / 元字符一律拒绝
+        let args: Vec<String> = ["echo hello"].iter().map(|s| s.to_string()).collect();
+        assert!(super::validate_detect_args(&args).is_err());
+        let args: Vec<String> = [r"C:\x"].iter().map(|s| s.to_string()).collect();
+        assert!(super::validate_detect_args(&args).is_err());
+        // 解释器执行型 flag
+        let args: Vec<String> = ["-c", "print(1)"].iter().map(|s| s.to_string()).collect();
+        assert!(super::validate_detect_args(&args).is_err());
+    }
+
+    #[test]
+    fn detect_args_reject_too_many() {
+        let args: Vec<String> = (0..5).map(|i| format!("f{}", i)).collect();
+        assert!(super::validate_detect_args(&args).is_err());
     }
 }

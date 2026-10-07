@@ -71,10 +71,12 @@ Windows 本地开发环境管理面板，基于 Tauri 2 + Vue 3 + Rust 构建。
 src-tauri/src/
 ├── lib.rs              # 应用入口、全局命令、启动兜底
 ├── plugin.rs           # ToolPlugin trait + PluginManager
-├── detector_base.rs    # RuntimeInstance trait + 统一去重
+├── detector_base.rs    # DbInstance / RuntimeInstance trait + 合并去重
+├── delete_safety.rs    # 删除操作归属校验与路径/注册表白名单
+├── maintenance_lock.rs # 危险维护操作互斥锁（防并发踩踏）
 ├── service_manager.rs  # windows crate ServiceManager API
 ├── download_control.rs # 下载任务控制（暂停/恢复/取消）
-├── logger.rs           # 日志发送 + 后端环形缓冲
+├── logger.rs           # 日志发送 + 脱敏 + 后端环形缓冲
 ├── access.rs           # 管理员权限检测
 ├── types.rs            # ts-rs 类型定义（自动导出到前端）
 ├── mysql/              # MySQL 模块（detector/commands/cleaner/fetcher/plugin）
@@ -94,14 +96,14 @@ src/
 ├── components/
 │   ├── shell/          # WorkbenchShell（双层 Tab）+ LogDock（可折叠日志面板）
 │   ├── shared/         # 通用容器（InstanceWorkbench / DownloadList / ResidueWorkflow）
-│   ├── common/         # ErrorBoundary
+│   ├── common/         # TaskCenter（任务中心弹层）
 │   ├── mysql/          # MySQL 功能组件
 │   ├── postgresql/
 │   ├── python/
 │   ├── java/
 │   ├── node/
 │   └── jetbrains/
-├── stores/             # Pinia stores（appStore / taskStore / loggerStore / 各工具 store）
+├── stores/             # Pinia stores（appStore / taskStore / tabStore / loggerStore / 各工具 store）
 ├── services/           # IPC 封装层
 ├── theme/              # CSS 变量 + prefers-color-scheme 跟随系统
 └── types/generated/    # ts-rs 自动生成的 TypeScript 类型

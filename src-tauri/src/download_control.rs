@@ -54,16 +54,90 @@ impl DownloadControl {
     }
 }
 
+impl Default for DownloadControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 全局下载任务注册表：task_id -> Arc<DownloadControl>
 static DOWNLOAD_TASKS: LazyLock<Mutex<HashMap<String, Arc<DownloadControl>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// 注册下载任务，返回控制句柄供下载循环持有
-pub fn register_task(task_id: &str) -> Result<Arc<DownloadControl>, String> {
+/// 注册下载任务，返回 RAII 守卫（`Guard` 持有控制句柄并在 drop 时自动清理注册表）。
+///
+/// **拒绝重复注册**：原实现直接 `map.insert` 覆盖同 `task_id`，会导致
+/// ① 旧任务与注册表脱钩 → 暂停/取消指令全部作用到新任务，旧任务在
+/// `while ctrl.is_paused()` 中**无限自旋无法终止**；
+/// ② 两个任务写同一 `file_path` 交叉损坏文件；
+/// ③ 旧任务结束时 `remove_task` 把新任务从表里删掉，新任务此后不可控。
+pub fn register_task(task_id: &str) -> Result<TaskGuard, String> {
     let ctrl = Arc::new(DownloadControl::new());
-    let mut map = DOWNLOAD_TASKS.lock().map_err(|e| format!("任务表锁中毒: {}", e))?;
+    let mut map = DOWNLOAD_TASKS
+        .lock()
+        .map_err(|e| format!("任务表锁中毒: {}", e))?;
+    if map.contains_key(task_id) {
+        return Err(format!("下载任务已在进行中: {}", task_id));
+    }
     map.insert(task_id.to_string(), ctrl.clone());
-    Ok(ctrl)
+    Ok(TaskGuard {
+        task_id: task_id.to_string(),
+        ctrl,
+    })
+}
+
+/// 任务注册表条目的 RAII 守卫。
+///
+/// 下载 future 若被 drop（invoke 取消、任务 panic、应用关闭），原实现会让
+/// 注册表项永久残留 —— 残留项又会让后续同名下载撞上重复注册。
+/// 守卫保证"作用域结束即移除"，且按**实例身份**移除，绝不会误删别人的条目。
+pub struct TaskGuard {
+    task_id: String,
+    ctrl: Arc<DownloadControl>,
+}
+
+impl std::fmt::Debug for TaskGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskGuard")
+            .field("task_id", &self.task_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TaskGuard {
+    /// 下载循环使用的控制句柄
+    pub fn ctrl(&self) -> &Arc<DownloadControl> {
+        &self.ctrl
+    }
+
+    /// 任务 id
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+}
+
+impl Drop for TaskGuard {
+    fn drop(&mut self) {
+        let _ = remove_task_if_same(&self.task_id, &self.ctrl);
+    }
+}
+
+/// 仅当注册表中该 id 仍指向**同一个**控制实例时才移除。
+///
+/// 显式 `remove_task(id)` 之后若又注册了同名任务，drop 守卫时
+/// `Arc::ptr_eq` 会失败，从而不会把新任务误删。
+pub fn remove_task_if_same(task_id: &str, ctrl: &Arc<DownloadControl>) -> Result<(), String> {
+    let mut map = DOWNLOAD_TASKS
+        .lock()
+        .map_err(|e| format!("任务表锁中毒: {}", e))?;
+    if map
+        .get(task_id)
+        .map(|c| Arc::ptr_eq(c, ctrl))
+        .unwrap_or(false)
+    {
+        map.remove(task_id);
+    }
+    Ok(())
 }
 
 /// 移除下载任务（下载完成或取消后调用）
@@ -124,6 +198,7 @@ enum DownloadOutcome {
 }
 
 /// 发送下载进度事件
+#[allow(clippy::too_many_arguments)]
 fn emit_progress(
     window: &Window,
     task_id: &str,
@@ -235,6 +310,7 @@ pub async fn compute_file_md5(file_path: &Path) -> Result<String, String> {
 /// - 取消时立即返回 `Cancelled`，调用方删除部分文件
 /// - `known_total` 为前次已知总大小：续传时若服务器未返回 Content-Length
 ///   （如 chunked 编码或 200 响应无长度头），回退到前次值，避免前端百分比突然归零
+#[allow(clippy::too_many_arguments)]
 async fn download_once(
     window: &Window,
     http_client: &reqwest::Client,
@@ -363,6 +439,7 @@ async fn download_once(
 ///
 /// 成功返回 `(实际字节数, 声明总大小)`，调用方自行计算 SHA256 并校验后发送终态事件。
 /// 失败/取消时本函数已发送终态事件（已取消/下载失败）。
+#[allow(clippy::too_many_arguments)]
 pub async fn download_file(
     app_handle: &AppHandle,
     window: &Window,
@@ -373,7 +450,9 @@ pub async fn download_file(
     http_client: &reqwest::Client,
     max_retries: u32,
 ) -> Result<(u64, u64), String> {
-    let ctrl = register_task(task_id)?;
+    // 守卫持有注册表条目：正常 return / 未来被 drop / panic 都会自动清理
+    let guard = register_task(task_id)?;
+    let ctrl = guard.ctrl().clone();
     let mut downloaded: u64 = 0;
     let mut total_size: u64 = 0;
     let mut error_count = 0u32;
@@ -552,4 +631,89 @@ pub fn devtools_config_dir() -> PathBuf {
         .map(|d| d.join("DevTools").join("config"))
         .or_else(|| dirs::cache_dir().map(|d| d.join("DevTools").join("config")))
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 注册表是全局 static，测试之间用互不冲突的 id 避免互相干扰
+    const A: &str = "__test_reg_a__";
+    const B: &str = "__test_reg_b__";
+    const C: &str = "__test_reg_c__";
+
+    #[test]
+    fn register_task_rejects_duplicate_id() {
+        let guard = register_task(A).expect("首次注册应成功");
+        let err = register_task(A).expect_err("重复注册应被拒绝");
+        assert!(err.contains("已在进行中"), "错误信息应说明已存在: {}", err);
+        // 首次注册的条目必须还在（不能被覆盖成第二个实例）
+        let map = DOWNLOAD_TASKS.lock().unwrap();
+        let stored = map.get(A).expect("首次注册的条目应仍在");
+        assert!(Arc::ptr_eq(stored, guard.ctrl()), "不得被覆盖");
+        drop(map);
+        drop(guard);
+    }
+
+    #[test]
+    fn guard_drop_removes_entry() {
+        {
+            let guard = register_task(B).expect("注册应成功");
+            assert!(DOWNLOAD_TASKS.lock().unwrap().contains_key(B));
+            drop(guard);
+        }
+        assert!(
+            !DOWNLOAD_TASKS.lock().unwrap().contains_key(B),
+            "守卫 drop 后注册表项必须被移除"
+        );
+    }
+
+    #[test]
+    fn remove_task_if_same_ignores_foreign_instance() {
+        let guard = register_task(C).expect("注册应成功");
+        let foreign = Arc::new(DownloadControl::new());
+        remove_task_if_same(C, &foreign).expect("移除操作本身不应报错");
+        assert!(
+            DOWNLOAD_TASKS.lock().unwrap().contains_key(C),
+            "身份不匹配时绝不能删除条目"
+        );
+        remove_task_if_same(C, guard.ctrl()).expect("身份匹配时应移除");
+        assert!(!DOWNLOAD_TASKS.lock().unwrap().contains_key(C));
+        drop(guard);
+    }
+
+    #[test]
+    fn pause_resume_cancel_toggle_flags() {
+        let c = DownloadControl::new();
+        assert!(!c.is_paused() && !c.is_cancelled());
+        c.pause();
+        assert!(c.is_paused());
+        c.resume();
+        assert!(!c.is_paused());
+        c.cancel();
+        assert!(c.is_cancelled());
+    }
+
+    #[test]
+    fn pause_resume_cancel_on_missing_task_returns_error() {
+        let missing = "__test_missing_task__";
+        let _ = remove_task(missing);
+        assert!(pause_task(missing).is_err());
+        assert!(resume_task(missing).is_err());
+        assert!(cancel_task(missing).is_err());
+    }
+
+    #[test]
+    fn control_on_registered_task_is_reachable_via_registry() {
+        let guard = register_task("__test_reach__").expect("注册应成功");
+        guard.ctrl().pause();
+        assert!(pause_task("__test_reach__").is_ok());
+        assert!(DOWNLOAD_TASKS
+            .lock()
+            .unwrap()
+            .get("__test_reach__")
+            .expect("条目应在")
+            .is_paused());
+        drop(guard);
+    }
 }

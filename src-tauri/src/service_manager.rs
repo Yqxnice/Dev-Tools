@@ -61,9 +61,9 @@ unsafe fn pwstr_to_string(pwsr: PWSTR) -> String {
 fn extract_exe_path(command_line: &str) -> String {
     let trimmed = command_line.trim();
     // 形式 1：以引号开头
-    if trimmed.starts_with('"') {
-        if let Some(end) = trimmed[1..].find('"') {
-            return trimmed[1..1 + end].to_string();
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        if let Some(end) = rest.find('"') {
+            return rest[..end].to_string();
         }
     }
     // 形式 2：无引号，尝试按空格逐步缩短前缀检查文件是否存在

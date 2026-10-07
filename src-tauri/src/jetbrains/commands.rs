@@ -1,6 +1,7 @@
 //! JetBrains 工具的 IPC 命令定义
 
 use crate::access;
+use crate::maintenance_lock::{self, Scope};
 use crate::types::*;
 use tauri::{AppHandle, Window};
 
@@ -47,6 +48,7 @@ pub async fn uninstall_jetbrains(
     app_handle: AppHandle,
     installation: JetBrainsInstallation,
 ) -> Result<(), String> {
+    let _maintenance = maintenance_lock::try_acquire(Scope::JetBrains)?;
     access::require_admin()?;
     uninstaller::uninstall_jetbrains(app_handle, installation).await
 }
@@ -64,6 +66,7 @@ pub async fn clean_jetbrains_residuals(
     app_handle: AppHandle,
     installation: JetBrainsInstallation,
 ) -> Result<CleanResult, String> {
+    let _maintenance = maintenance_lock::try_acquire(Scope::JetBrains)?;
     access::require_admin()?;
     Ok(cleaner::clean_jetbrains_residuals(app_handle, installation).await)
 }

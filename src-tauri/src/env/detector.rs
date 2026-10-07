@@ -80,7 +80,7 @@ fn read_reg_sz(hkey_root: HKEY, subkey: &str, value_name: &str) -> Option<String
             PCWSTR(name_w.as_ptr()),
             None,
             None,
-            Some(buf.as_mut_ptr() as *mut u8),
+            Some(buf.as_mut_ptr()),
             Some(&mut buf_len),
         );
         let _ = RegCloseKey(hkey2);
